@@ -1,0 +1,4 @@
+# Python dependencies
+matplotlib
+numpy
+Pillow
