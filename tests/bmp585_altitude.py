@@ -1,6 +1,5 @@
 import time
 
-# Import your driver safely across directories
 from lib.micropython_bmpxxx import bmpxxx
 from lib.pi_zero_utils import pico_temperature, scan_i2c_bus
 from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
@@ -8,17 +7,15 @@ from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 
 # -------------------------------------------------------------------------
 def main():
-    # Initialize the Pi Zero I2C bus bridge
-    i2c_bridge = PiZeroI2CBridge("/dev/i2c-1")
-
-    scan_i2c_bus(i2c_bridge)
+    i2c1 = PiZeroI2CBridge("/dev/i2c-1")
+    scan_i2c_bus(i2c1)
 
     try:
         pi_celsius = pico_temperature() or 0.0
         print(f"Pi Celsius = {pi_celsius:.1f}° C\n")
 
         # Initialize the driver using  hardware bridge compatibility layer
-        bmp = bmpxxx.BMP585(i2c=i2c_bridge, address=0x47)
+        bmp = bmpxxx.BMP585(i2c=i2c1, address=0x47)
 
         # Configure OverSampling and IIR filter settings
         bmp.pressure_oversample_rate = bmp.OSR4
@@ -65,7 +62,7 @@ def main():
         print("\nExit on User Interrupt...")
     finally:
         # close bridge interface
-        i2c_bridge.close()
+        i2c1.close()
 
 
 if __name__ == "__main__":

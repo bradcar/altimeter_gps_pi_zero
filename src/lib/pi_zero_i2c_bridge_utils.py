@@ -1,22 +1,34 @@
-#pi_zero_i2c_bridge_utils.py
+# pi_zero_i2c_bridge_utils.py
 """
 Raspberry Pi Zero I2C Bridge Object
+
+Using i2c 1 Primary i2c on Pi Zero:
+    i2c1 = PiZeroI2CBridge()
+    or:
+    i2c1 = PiZeroI2CBridge("/dev/i2c-1")
+    SDA: GPIO 2 (Physical Pin 3)
+    SCL: GPIO 3 (Physical Pin 2)
+
+Using i2c 0 Secondary i2c on Pi Zero:
+    i2c0 = PiZeroI2CBridge("/dev/i2c-0")
+    SDA: GPIO 0 (Physical Pin 27)
+    SCL: GPIO 1 (Physical Pin 28)
+
 """
 from periphery import I2C
 
 
 class PiZeroI2CBridge:
     def __init__(self, bus_path="/dev/i2c-1"):
-        # Maps to default Pi Zero hardware I2C pins: SDA (GPIO2), SCL (GPIO3)
+
         self.i2c = I2C(bus_path)
 
     def scan(self):
-        """Scan the I2C bus and return a list of responding 7-bit addresses."""
+        """Scan the I2C bus and return a list 7-bit i2c addresses, 0x08 to 0x77 (8 to 119)"""
         active_devices = []
-        # Standard 7-bit I2C address range is 0x08 to 0x77 (8 to 119)
         for addr in range(0x08, 0x78):
             try:
-                # Try a raw, 0-byte write to ping the address
+                # Try a 0-byte write to ping the address
                 self.writeto(addr, b"")
                 active_devices.append(addr)
             except OSError:
