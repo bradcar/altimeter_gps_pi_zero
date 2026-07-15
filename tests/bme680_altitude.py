@@ -3,16 +3,6 @@
 # bme680 driver code:
 #    https://github.com/robert-hh/BME680-Micropython
 #
-# IAQ (Indoor Air Quality) calculation:
-#    IAQ value between 0 and 500, where lower values represent higher air quality.
-#    https://github.com/thstielow/raspi-bme680-iaq
-#      IAQ:     0- 50 good
-#              51-100 average
-#             101-150 poor
-#             151-200 bad
-#             201-300 worse
-#             301-500 very bad
-#
 # Portland - PDX airport sea level pressure updated every hour
 #     https://www.weather.gov/wrh/timeseries?site=KPDX
 #
@@ -23,10 +13,32 @@
 
 import time
 from math import log
+from typing import Any
 
 from bme680 import BME680_I2C
 from lib.pi_zero_utils import pico_temperature, scan_i2c_bus
-from pi_zero_i2c_bridge import PiZeroI2CBridge
+from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
+
+
+def iaq_estimate(gas_resist: Any, percent_humidity) -> Any:
+    """
+    IAQ (Indoor Air Quality) calculation:
+        IAQ value between 0 and 500, where lower values represent higher air quality.
+        https://github.com/thstielow/raspi-bme680-iaq
+        IAQ:      0- 50 good
+                 51-100 average
+                101-150 poor
+                151-200 bad
+                201-300 worse
+                301-500 very bad
+
+    :param gas_resist:
+    :param percent_humidity:
+    :return:
+    """
+    iaq = log(gas_resist) + 0.04 * percent_humidity
+    return iaq
+
 
 
 def bme_temp_humid_hpa_iaq_alt(bme, sea_level):
@@ -54,7 +66,7 @@ def bme_temp_humid_hpa_iaq_alt(bme, sea_level):
 
         # derived sensor data
         meters = 44330.0 * (1.0 - (hpa_pressure / sea_level) ** (1.0 / 5.255))
-        iaq = log(gas_resist) + 0.04 * percent_humidity
+        iaq = iaq_estimate(gas_resist, percent_humidity)
 
         if debug:
             print(f"BME680 Temp °C = {temp_c:.1f}° C")
@@ -69,6 +81,8 @@ def bme_temp_humid_hpa_iaq_alt(bme, sea_level):
         return None, None, None, None, None, "ERROR_BME680:" + str(e)
 
     return temp_c, percent_humidity, hpa_pressure, iaq, meters, None
+
+
 
 
 # -------------------------------------------------------------------------

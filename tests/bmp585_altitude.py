@@ -3,7 +3,7 @@ import time
 # Import your driver safely across directories
 from lib.micropython_bmpxxx import bmpxxx
 from lib.pi_zero_utils import pico_temperature, scan_i2c_bus
-from pi_zero_i2c_bridge import PiZeroI2CBridge
+from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 
 
 # -------------------------------------------------------------------------
