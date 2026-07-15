@@ -1,5 +1,8 @@
 # Python dependencies
+# run with: /home/pi-admin/.virtualenvs/altimeter_gps_pi_zero/bin/pip install -r requirements.txt
 matplotlib
 numpy
 Pillow
 python-periphery
+adafruit-circuitpython-gps
+pyserial
