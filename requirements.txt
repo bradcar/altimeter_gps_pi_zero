@@ -6,3 +6,5 @@ Pillow
 python-periphery
 adafruit-circuitpython-gps
 pyserial
+gpiozero
+rpi-lgpio
