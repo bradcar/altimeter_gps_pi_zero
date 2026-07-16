@@ -17,16 +17,8 @@ from lib.micropython_bmpxxx import bmpxxx
 from lib.pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 from lib.pi_zero_utils import pico_temperature, scan_i2c_bus
 from lib.bme680 import BME680_I2C
-# from framebuf import FrameBuffer, MONO_HLSB
-
-# Peter Hinch fonts: https://github.com/peterhinch/micropython-font-to-py
-# short_writer Code modified by: Charlotte Swift
-# import freesans20 as font_20px  # 20px high
-# from writer_short import Writer
-
-# ssd1306 SDI SW setup for ssd1309 SDI
-
-# from ssd1306 import SSD1306_SPI
+from eink_utils import init_eink_display, blank_canvas_eink, refresh_eink_display
+from PIL import ImageFont, ImageDraw, Image
 
 DEBUG = True
 
@@ -63,8 +55,17 @@ button_3_pushed = False
 
 # buzzer = ??
 
-# oled = SSD1306_SPI(DISP_WIDTH, DISP_HEIGHT, oled_spi, dc, res, cs_gpio)
-# text_20px = Writer(oled, font_20px, verbose=False)
+# Initialize the SSD1680 e-ink hardware & Pillow canvas
+epd_disp, epd_draw, epd_font_small, epd_image = init_eink_display()
+
+# Load custom font sizes using Pillow
+try:
+    font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+    font_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
+except IOError:
+    # Fallback to default if DejaVu isn't installed on the system
+    font_small = ImageFont.load_default()
+    font_big = ImageFont.load_default()
 
 
 # Mimick MicroPython millisecond timers
@@ -86,6 +87,7 @@ debounce_1_time = 0
 debounce_2_time = 0
 debounce_3_time = 0
 
+
 def button_1_handler():
     global button_1_pushed, debounce_1_time
     if (ticks_ms() - debounce_1_time) > 500:
@@ -105,6 +107,7 @@ def button_3_handler():
     if (ticks_ms() - debounce_3_time) > 500:
         button_3_pushed = True
         debounce_3_time = ticks_ms()
+
 
 button_1.when_pressed = button_1_handler
 button_2.when_pressed = button_2_handler
@@ -201,83 +204,141 @@ def bme680_sensor(sea_level_pressure):
     return celsius, percent_humidity, hpa_pressure, iaq_value, meters, None
 
 
+def metric_format():
+    """
+    Metric format
+    :return:
+        conversion factor and string denotation
+    """
+    if is_metric:
+        unit = " m"
+        convert = 1.0
+    else:
+        unit = "'"
+        convert = 3.28084
+    return convert, unit
+
+
+def altitude_to_string(altitude_m):
+    if is_metric:
+        unit = " m"
+        convert = 1.0
+    else:
+        unit = "'"
+        convert = 3.28084
+    altitude_string = f"{altitude_m * convert:.0f}{unit}"
+    return altitude_string
+
+
+def altitude_reference_splash():
+    epd_draw.rectangle((0, 0, 250, 122), fill=255)
+
+    epd_draw.text((3, 5), "Oregon Altitudes", font=font_small, fill=0)
+    epd_draw.line((5, 21, 240, 21), fill=0, width=1)  # Thin separator line
+
+    b = 27
+    y = 16
+    x1 = 15
+    x2 = 150
+    x3 = 160
+    epd_draw.text((x1, b + 0 * y), "Garage:", font=font_small, fill=0)
+    epd_draw.text((x3, b + 0 * y), "339'", font=font_small, fill=0)
+    epd_draw.text((x1, b + 1 * y), "Sylvan:", font=font_small, fill=0)
+    epd_draw.text((x3, b + 1 * y), "761'", font=font_small, fill=0)
+    epd_draw.text((x1, b + 2 * y), "Meadows Main:", font=font_small, fill=0)
+    epd_draw.text((x2, b + 2 * y), "5003'", font=font_small, fill=0)
+    epd_draw.text((x1, b + 3 * y), "Meadows HRM:", font=font_small, fill=0)
+    epd_draw.text((x2, b + 3 * y), "4540'", font=font_small, fill=0)
+    epd_draw.text((x1, b + 4 * y), "Bachelor Main:", font=font_small, fill=0)
+    epd_draw.text((x2, b + 4 * y), "6207'", font=font_small, fill=0)
+    epd_draw.text((x1, b + 5 * y), "Rock Gym Beav:", font=font_small, fill=0)
+    epd_draw.text((x3, b + 5 * y), "122'", font=font_small, fill=0)
+    refresh_eink_display(epd_disp, epd_draw, epd_image, partial=False)
+
+    # Hold the splash screen list
+    zzz(20)
+
+
 def display_details(buzz):
-    # oled.fill(0)
-    # if metric:
-    #     oled.text(f"Alt = {altitude_m:.1f}m", 0, 0)
-    #     oled.text(f"Temp = {temp_c:.1f}C", 0, 16)
-    #     oled.text(f"Bar  ={pressure_hpa:.1f} hpa", 0, 28)
-    # else:
-    #     oled.text(f"Alt = {altitude_m * 3.28084:.0f}\'", 0, 0)
-    #     oled.text(f"Temp = {temp_f:.1f}F", 0, 16)
-    #     oled.text(f"Bar  = {pressure_hpa * 0.02953:.2f}\"", 0, 28)
-    #
-    # if humidity:
-    #     oled.text(f"Hum  = {humidity:.1f}%", 0, 40)
-    # else:
-    #     oled.text(f"Hum  = no sensor", 0, 40)
-    #
-    # if iaq:
-    #     oled.text(f"IAQ  = {iaq:.0f} {iaq_quality_to_string(iaq)}", 0, 52)
-    # else:
-    #     oled.text(f"IAQ  = no sensor", 0, 52)
-    # oled.show()
-    return
+    epd_draw.rectangle((0, 0, 250, 122), fill=255)
+
+    if is_metric:
+        epd_draw.text((10, 5), f"Alt: {altitude_m:.3f} m", font=font_small, fill=0)
+        epd_draw.text((10, 25), f"Baro: {pressure_hpa:.2f} hPa", font=font_small, fill=0)
+        epd_draw.text((10, 45), f"Temp: {temp_c:.1f} C", font=font_small, fill=0)
+
+    else:
+        epd_draw.text((10, 5), f"Alt: {altitude_m * 3.28084:.0f}'", font=font_small, fill=0)
+        epd_draw.text((10, 25), f"Baro: {pressure_hpa * 0.02953:.2f}\"", font=font_small, fill=0)
+        epd_draw.text((10, 45), f"Temp: {temp_f:.1f} F", font=font_small, fill=0)
+
+
+    hum_str = f"Humidity: {humidity:.1f}%" if humidity else "Hum: No Sensor"
+    iaq_str = f"IAQ: {iaq:.0f} ({iaq_quality_to_string(iaq)})" if iaq else "IAQ: No Sensor"
+
+    epd_draw.text((10, 65), hum_str, font=font_small, fill=0)
+    epd_draw.text((10, 85), iaq_str, font=font_small, fill=0)
+
+    # Prepare for partial update
+    refresh_eink_display(epd_disp, epd_draw, epd_image, partial=True)
 
 
 def display_big_num(buzz):
-    # global warning_toggle
-    # oled.fill(0)
-    # oled.text("Altimeter", 0, 0)
-    #
-    # if iaq and iaq > 150.0:
-    #     oled.fill_rect(128 - 3 * 8, 0, 26, 10, 1 - warning_toggle)
-    #     oled.text("iaq", 128 - 3 * 8 - 1, 1, warning_toggle)
-    #     warning_toggle = 1 - warning_toggle
-    #
-    # if metric:
-    #     unit = " m"
-    #     convert = 1.0
-    # else:
-    #     unit = "\'"
-    #     convert = 3.28084
-    # oled.text("Alt", 16, 20)
-    # text_20px.set_textpos(49, 15)
-    # text_20px.printstring(f"{(altitude_m * convert):.0f}{unit}")
-    #
-    # oled.text("hPA", 16, 43)
-    # text_20px.set_textpos(52, 38)
-    # text_20px.printstring(f"{pressure_hpa:.1f}")
-    # oled.show()
-    return
+    epd_draw.rectangle((0, 0, 250, 122), fill=255)
+
+    epd_draw.text((10, 5), "ALTIMETER & GPS", font=font_small, fill=0)
+
+    convert, unit = metric_format()
+
+    # Display primary dashboard values
+    alt_val = f"{altitude_m * convert:.0f}{unit}"
+    press_val = f"{pressure_hpa:.1f} hPa"
+
+    epd_draw.text((15, 30), f"ALT:  {alt_val}", font=font_big, fill=0)
+    epd_draw.text((15, 65), f"PRES: {press_val}", font=font_big, fill=0)
+
+    # Flash IAQ warning (black banner with white text in the top right)
+    if iaq and iaq > 150.0:
+        epd_draw.rectangle((180, 2, 240, 20), fill=0)
+        epd_draw.text((192, 4), "IAQ!", font=font_small, fill=255)
+
+    refresh_eink_display(epd_disp, epd_draw, epd_image, partial=True)
 
 
 def update_settings_display(alt, press):
-    # oled.fill(0)
-    # oled.invert(1)
-    # oled.text("Setting Alt...", 0, 0)
-    #
-    # if metric:
-    #     unit = " m"
-    #     convert = 1.0
-    # else:
-    #     unit = "\'"
-    #     convert = 3.28084
-    # oled.text("new", 16, 15)
-    # oled.text("Alt", 16, 24)
-    # text_20px.set_textpos(49, 15)
-    # text_20px.printstring(f"{(alt * convert):.0f}{unit}")
-    #
-    # oled.text("Sea", 16, 38)
-    # oled.text("hPA", 16, 47)
-    # text_20px.set_textpos(52, 38)
-    # text_20px.printstring(f"{press:.1f}")
-    # oled.show()
+    """
+    Update settings
+    """
+    epd_draw.rectangle((0, 0, 250, 122), fill=0)
+
+    convert, unit = metric_format()
+
+    epd_draw.text((10, 8), "SETTING ALTITUDE...", font=font_small, fill=255)
+    epd_draw.line((10, 26, 240, 26), fill=255, width=1)
+
+    # New Altitude Data
+    # Small stacked labels on the left side
+    epd_draw.text((15, 38), "NEW", font=font_small, fill=255)
+    epd_draw.text((15, 52), "ALT", font=font_small, fill=255)
+    # Big target value on the right side
+    alt_val = f"{(alt * convert):.0f}{unit}"
+    epd_draw.text((85, 38), alt_val, font=font_big, fill=255)
+
+    # Sea Level Pressure Data
+    # Small stacked labels on the left side
+    epd_draw.text((15, 78), "SEA", font=font_small, fill=255)
+    epd_draw.text((15, 92), "hPA", font=font_small, fill=255)
+    # Big target value on the right side
+    press_val = f"{press:.1f}"
+    epd_draw.text((85, 78), press_val, font=font_big, fill=255)
+
+    # Push visual updates (use partial refresh for fast response during rotation)
+    refresh_eink_display(epd_disp, epd_draw, epd_image, partial=True)
     return
 
 
 def adjust_altitude_slp(buzz, bmp_update):
-    global metric, sea_level_pressure, slp_hpa_bme680, slp_hpa_bmp585
+    global is_metric, sea_level_pressure, slp_hpa_bme680, slp_hpa_bmp585
 
     new_alt = altitude_m
     if bmp_update:
@@ -299,12 +360,11 @@ def adjust_altitude_slp(buzz, bmp_update):
     update_settings_display(altitude_m, new_slp)
 
     rotary_multiplier = 1
-    # Swapped .value() to gpiozero's step interface
     rotary_old = encoder.steps
     while not button2():
 
         if button1():
-            metric = not metric
+            is_metric = not is_metric
 
         new_alt_feet = new_alt * 3.28084
 
@@ -343,13 +403,12 @@ def adjust_altitude_slp(buzz, bmp_update):
     return
 
 
-
 show_env_details = False
 set_known = False
 buzzer_sound = True
-metric = False
+is_metric = True
 
-INIT_SEA_LEVEL_PRESSURE = 1010.70
+INIT_SEA_LEVEL_PRESSURE = 1018.10
 SLP_CALIBRATION_BMP585 = -0.1931
 SLP_CALIBRATION_BME680 = 1.0147
 
@@ -385,8 +444,6 @@ except Exception as e:
     error_bmp585 = True
     print(f"ERROR: init bmp58x.BMP585(i2c=i2c, address=0x47): {e}")
 
-print(f"ADD CODE to Enable E-INK\n")
-
 try:
     with open("last-sea-level-pressure.txt", "r") as data_file:
         sea_level_pressure = float(data_file.read().strip())
@@ -403,15 +460,16 @@ slp_hpa_bme680 = sea_level_pressure + SLP_CALIBRATION_BME680
 # zzz(.2)
 # buzzer.off()
 
-print("OLED: Oregon Altitudes, 0, 0")
-print("OLED: Garage:    339', 4, 9")
-print("OLED: Sylvan:    761', 4, 18")
-print("OLED: MHM Main: 5003', 4, 27")
-print("OLED: MHM HRM:  4540', 4, 36")
-print("OLED: BachMain: 6207', 4, 45")
-print("OLED: PDX13 wk:  122', 4, 54")
 
-zzz(5)
+altitude_reference_splash()
+
+# main loop variables
+last_eink_update = time.ticks_ms()
+UPDATE_INTERVAL_MS = 5000  # Cap E-ink refresh to once every 5 seconds maximum
+
+# Store previous values to detect actual changes
+prev_alt = None
+prev_press = None
 
 # main loop
 print("start of main loop\n")
@@ -425,7 +483,7 @@ try:
         if DEBUG: print(f"Time since last temp ={elapsed_time}")
 
         if button1():
-            metric = not metric
+            is_metric = not is_metric
 
         if button2():
             adjust_altitude_slp(True, bmp_update=not error_bmp585)
@@ -483,15 +541,33 @@ try:
             first_run = False
 
         time.sleep_ms(dwell)
-        # led.toggle()
-        loop_elapsed_time = ticks_diff(ticks_ms(), loop_time)
-        if DEBUG:
-            print(f"loop time with {dwell}ms delay={loop_elapsed_time}")
 
-        if show_env_details:
-            display_details(buzzer_sound)
-        else:
-            display_big_num(buzzer_sound)
+        # Check if we should push a screen refresh
+        now = time.ticks_ms()
+        time_since_refresh = time.ticks_diff(now, last_eink_update)
+
+        # Determine if values changed significantly
+        values_changed = False
+        if prev_alt is None or abs(altitude_m - prev_alt) > 0.5 or abs(pressure_hpa - prev_press) > 0.2:
+            values_changed = True
+
+        # Check if a button was pressed (which requires instant visual feedback)
+        button_pressed = button_1_pushed or button_2_pushed or button_3_pushed
+
+        # Trigger refresh ONLY if interval has elapsed AND (data changed OR button was pressed)
+        if time_since_refresh >= UPDATE_INTERVAL_MS and (values_changed or button_pressed):
+
+            # Save state to prevent double fires
+            prev_alt = altitude_m
+            prev_press = pressure_hpa
+            last_eink_update = now
+
+            # todo buzzer_sound
+            buzzer_sound = None
+            if show_env_details:
+                display_details(buzzer_sound)
+            else:
+                display_big_num(buzzer_sound)
 
 except KeyboardInterrupt:
     # Clean visual exit and close Linux resources

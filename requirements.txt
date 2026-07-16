@@ -8,3 +8,4 @@ adafruit-circuitpython-gps
 pyserial
 gpiozero
 rpi-lgpio
+adafruit-circuitpython-epd

@@ -1,4 +1,4 @@
-# e_ink_utils.py
+# eink_utils.py
 """
 General Utils for E-ink SSD1680
 """
@@ -20,7 +20,6 @@ def init_eink_display(spi=None):
     if spi is None:
         spi = busio.SPI(board.SCK, board.MOSI)
 
-    ecs = digitalio.DigitalInOut(board.CE0)  # Chip Select
     dc = digitalio.DigitalInOut(board.D22)  # Data/Command Control
     rst = digitalio.DigitalInOut(board.D27)  # Hardware Reset
     busy = digitalio.DigitalInOut(board.D17)  # Hardware Busy Line
@@ -29,7 +28,7 @@ def init_eink_display(spi=None):
         width=E_INK_WIDTH,
         height=E_INK_HEIGHT,
         spi=spi,
-        cs_pin=ecs,
+        cs_pin=board.CE0,
         dc_pin=dc,
         sramcs_pin=None,
         rst_pin=rst,
