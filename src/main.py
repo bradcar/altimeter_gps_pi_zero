@@ -10,15 +10,14 @@ import sys
 from time import sleep as zzz
 
 from gpiozero import Button, RotaryEncoder
-from periphery import I2C
 
 from lib.bme680_utils import iaq_quality_to_string
 from lib.micropython_bmpxxx import bmpxxx
 from lib.pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 from lib.pi_zero_utils import pico_temperature, scan_i2c_bus
 from lib.bme680 import BME680_I2C
-from eink_utils import init_eink_display, blank_canvas_eink, refresh_eink_display
-from PIL import ImageFont, ImageDraw, Image
+from lib.eink_ssd1680_utils import init_eink_display, blank_canvas_eink, refresh_eink_display
+from PIL import ImageFont
 
 DEBUG = True
 
@@ -61,14 +60,15 @@ epd_disp, epd_draw, epd_font_small, epd_image = init_eink_display()
 # Load custom font sizes using Pillow
 try:
     font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
-    font_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
+    font_medium = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+    font_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
 except IOError:
-    # Fallback to default if DejaVu isn't installed on the system
     font_small = ImageFont.load_default()
+    font_medium = ImageFont.load_default()
     font_big = ImageFont.load_default()
 
 
-# Mimick MicroPython millisecond timers
+# Mimic MicroPython millisecond timers
 def ticks_ms():
     return int(time.monotonic() * 1000)
 
@@ -179,7 +179,7 @@ def calculate_iaq(gas_ohms, percent_humidity):
         humidity_score = None
 
     ln_iaq = log(gas_ohms)
-    iaq = (9.4751 * (ln_iaq) ** 2 - 316.31 * (ln_iaq) + 2524.0) + 6 * humidity_score
+    iaq = (9.4751 * ln_iaq ** 2 - 316.31 * ln_iaq + 2524.0) + 6 * humidity_score
     return max(0, min(500.0, iaq))
 
 
@@ -204,6 +204,10 @@ def bme680_sensor(sea_level_pressure):
     return celsius, percent_humidity, hpa_pressure, iaq_value, meters, None
 
 
+def feet_to_meters(feet):
+    return feet / 3.28084
+
+
 def metric_format():
     """
     Metric format
@@ -219,83 +223,122 @@ def metric_format():
     return convert, unit
 
 
-def altitude_to_string(altitude_m):
+def altitude_to_string(altitude_m, digits):
     if is_metric:
         unit = " m"
         convert = 1.0
     else:
         unit = "'"
         convert = 3.28084
-    altitude_string = f"{altitude_m * convert:.0f}{unit}"
+    altitude_string = f"{altitude_m * convert:.{digits}f}{unit}"
     return altitude_string
+
+
+def display_list_names_values(altitude_data: list[tuple[str, str]], font_list, line_height: int,
+                              start_y: int, left_margin_x: int, right_align_x: int):
+    for index, (location, elevation) in enumerate(altitude_data):
+        current_y = start_y + (index * line_height)
+
+        epd_draw.text((left_margin_x, current_y), location, font=font_list, fill=0)
+
+        # Right align text
+        text_width = font_small.getlength(elevation)
+        elevation_x = right_align_x - text_width
+        epd_draw.text((elevation_x, current_y), elevation, font=font_list, fill=0)
 
 
 def altitude_reference_splash():
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
 
     epd_draw.text((3, 5), "Oregon Altitudes", font=font_small, fill=0)
-    epd_draw.line((5, 21, 240, 21), fill=0, width=1)  # Thin separator line
+    epd_draw.line((5, 21, 240, 21), fill=0, width=1)
 
-    b = 27
-    y = 16
-    x1 = 15
-    x2 = 150
-    x3 = 160
-    epd_draw.text((x1, b + 0 * y), "Garage:", font=font_small, fill=0)
-    epd_draw.text((x3, b + 0 * y), "339'", font=font_small, fill=0)
-    epd_draw.text((x1, b + 1 * y), "Sylvan:", font=font_small, fill=0)
-    epd_draw.text((x3, b + 1 * y), "761'", font=font_small, fill=0)
-    epd_draw.text((x1, b + 2 * y), "Meadows Main:", font=font_small, fill=0)
-    epd_draw.text((x2, b + 2 * y), "5003'", font=font_small, fill=0)
-    epd_draw.text((x1, b + 3 * y), "Meadows HRM:", font=font_small, fill=0)
-    epd_draw.text((x2, b + 3 * y), "4540'", font=font_small, fill=0)
-    epd_draw.text((x1, b + 4 * y), "Bachelor Main:", font=font_small, fill=0)
-    epd_draw.text((x2, b + 4 * y), "6207'", font=font_small, fill=0)
-    epd_draw.text((x1, b + 5 * y), "Rock Gym Beav:", font=font_small, fill=0)
-    epd_draw.text((x3, b + 5 * y), "122'", font=font_small, fill=0)
+    altitude_data = [
+        ("Garage:", altitude_to_string(feet_to_meters(339), 0)),
+        ("Sylvan On-ramp:", altitude_to_string(feet_to_meters(761), 0)),
+        ("Meadows Main:", altitude_to_string(feet_to_meters(5003), 0)),
+        ("Meadows HRM:", altitude_to_string(feet_to_meters(4540), 0)),
+        ("Bachelor Main:", altitude_to_string(feet_to_meters(6207), 0)),
+        ("Rock Gym Beav:", altitude_to_string(feet_to_meters(122), 0)),
+    ]
+
+    font_list = font_small
+    start_y = 25
+    line_height = 16
+    if is_metric:
+        left_margin_x = 25
+        right_align_x = 225
+    else:
+        left_margin_x = 29
+        right_align_x = 216
+
+    display_list_names_values(altitude_data, font_list, line_height, start_y, left_margin_x, right_align_x)
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=False)
-
-    # Hold the splash screen list
-    zzz(20)
+    zzz(5)
 
 
-def display_details(buzz):
+def display_altimeter_details(buzz):
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
+    epd_draw.text((3, 5), "Altimeter Details", font=font_small, fill=0)
+    epd_draw.line((5, 21, 240, 21), fill=0, width=1)
 
     if is_metric:
-        epd_draw.text((10, 5), f"Alt: {altitude_m:.3f} m", font=font_small, fill=0)
-        epd_draw.text((10, 25), f"Baro: {pressure_hpa:.2f} hPa", font=font_small, fill=0)
-        epd_draw.text((10, 45), f"Temp: {temp_c:.1f} C", font=font_small, fill=0)
-
+        barometer_string = f"{pressure_hpa:.2f} hPa"
+        temperature_string = f"{temp_c:.1f}° C"
     else:
-        epd_draw.text((10, 5), f"Alt: {altitude_m * 3.28084:.0f}'", font=font_small, fill=0)
-        epd_draw.text((10, 25), f"Baro: {pressure_hpa * 0.02953:.2f}\"", font=font_small, fill=0)
-        epd_draw.text((10, 45), f"Temp: {temp_f:.1f} F", font=font_small, fill=0)
+        barometer_string = f"{pressure_hpa * 0.02953:.2f}\""
+        temperature_string = f"{temp_f:.1f}° F"
+    humidity_string = f"{humidity:.1f}%" if humidity else "No Sensor"
+    iaq_string = f"{iaq:.0f} ({iaq_quality_to_string(iaq)})" if iaq else "No Sensor"
 
+    sensor_data = [
+        ("Altitude", altitude_to_string(altitude_m, 3)),
+        ("Barometer", barometer_string),
+        ("Temp", temperature_string),
+        ("Humidity", humidity_string),
+        ("IAQ", iaq_string),
+    ]
 
-    hum_str = f"Humidity: {humidity:.1f}%" if humidity else "Hum: No Sensor"
-    iaq_str = f"IAQ: {iaq:.0f} ({iaq_quality_to_string(iaq)})" if iaq else "IAQ: No Sensor"
-
-    epd_draw.text((10, 65), hum_str, font=font_small, fill=0)
-    epd_draw.text((10, 85), iaq_str, font=font_small, fill=0)
-
-    # Prepare for partial update
+    font_list = font_medium
+    start_y = 27
+    line_height = 18
+    if is_metric:
+        left_margin_x = 1
+        right_align_x = 220
+    else:
+        left_margin_x = 16
+        right_align_x = 209
+    display_list_names_values(sensor_data, font_list, line_height, start_y, left_margin_x, right_align_x)
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=True)
 
 
-def display_big_num(buzz):
+def display_big_dashboard(buzz):
+    """
+    Display main dashboard
+    :param buzz:
+    :return:
+    """
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
 
-    epd_draw.text((10, 5), "ALTIMETER & GPS", font=font_small, fill=0)
+    epd_draw.text((1, 5), "Altimeter & GPS", font=font_small, fill=0)
 
     convert, unit = metric_format()
+    alt_string = f"{altitude_m * convert:.0f}"
+    alt_metric_string = f"{unit}"
+    press_string = f"{pressure_hpa:.2f}"
+    press_metric_string = f"hpa"
 
-    # Display primary dashboard values
-    alt_val = f"{altitude_m * convert:.0f}{unit}"
-    press_val = f"{pressure_hpa:.1f} hPa"
+    # todo adjust for number of digits
 
-    epd_draw.text((15, 30), f"ALT:  {alt_val}", font=font_big, fill=0)
-    epd_draw.text((15, 65), f"PRES: {press_val}", font=font_big, fill=0)
+    epd_draw.text((0, 35), f"Altitude", font=font_small, fill=0)
+    epd_draw.text((74, 30), alt_string, font=font_big, fill=0)
+    if is_metric:
+        epd_draw.text((130, 30 + 9), alt_metric_string, font=font_medium, fill=0)
+    else:
+        epd_draw.text((132, 30), "'", font=font_big, fill=0)
+    epd_draw.text((0, 70), f"Pressure", font=font_small, fill=0)
+    epd_draw.text((74, 65), press_string, font=font_big, fill=0)
+    epd_draw.text((202, 65 + 9), press_metric_string, font=font_medium, fill=0)
 
     # Flash IAQ warning (black banner with white text in the top right)
     if iaq and iaq > 150.0:
@@ -465,7 +508,7 @@ altitude_reference_splash()
 
 # main loop variables
 last_eink_update = time.ticks_ms()
-UPDATE_INTERVAL_MS = 5000  # Cap E-ink refresh to once every 5 seconds maximum
+UPDATE_INTERVAL_MS = 5000  # limit Eink refresh to once every 5 seconds
 
 # Store previous values to detect actual changes
 prev_alt = None
@@ -542,13 +585,13 @@ try:
 
         time.sleep_ms(dwell)
 
-        # Check if we should push a screen refresh
+        # Check if we should refresh Eink
         now = time.ticks_ms()
         time_since_refresh = time.ticks_diff(now, last_eink_update)
 
-        # Determine if values changed significantly
+        # todo: is this correct? Determine if values changed significantly
         values_changed = False
-        if prev_alt is None or abs(altitude_m - prev_alt) > 0.5 or abs(pressure_hpa - prev_press) > 0.2:
+        if prev_alt is None or abs(altitude_m - prev_alt) > 0.05 or abs(pressure_hpa - prev_press) > 0.02:
             values_changed = True
 
         # Check if a button was pressed (which requires instant visual feedback)
@@ -565,14 +608,22 @@ try:
             # todo buzzer_sound
             buzzer_sound = None
             if show_env_details:
-                display_details(buzzer_sound)
+                display_altimeter_details(buzzer_sound)
             else:
-                display_big_num(buzzer_sound)
+                display_big_dashboard(buzzer_sound)
 
 except KeyboardInterrupt:
-    # Clean visual exit and close Linux resources
-    # oled.fill(0)
-    # oled.show()
-    i2c1.close()
-    # oled_spi.close()
-    print("Exit: ctrl-c")
+    print("\nExit (Ctrl-C)")
+
+except Exception as e:
+    print(f"\nProgram unexpected crash: {e}")
+
+finally:
+    try:
+        i2c1.close()
+    except Exception as e:
+        print(f"Failed to close I2C: {e}")
+    try:
+        epd_disp.sleep()
+    except Exception as e:
+        print(f"Failed to sleep E-ink display: {e}")
