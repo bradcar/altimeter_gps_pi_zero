@@ -149,7 +149,7 @@ class Adafruit_BME680:
         return calc_temp / 100
 
     @property
-    def pressure(self):
+    def pressure_fp(self):
         self._perform_reading()
         var1 = (self._t_fine / 2) - 64000
         var2 = ((var1 / 4) * (var1 / 4)) / 2048
@@ -169,6 +169,55 @@ class Adafruit_BME680:
         var3 = (((calc_pres / 256) ** 3) * self._pressure_calibration[9]) / 131072
         calc_pres += ((var1 + var2 + var3 + (self._pressure_calibration[6] * 128)) / 16)
         return calc_pres / 100
+
+    @property
+    def pressure(self):
+        """
+        Integer-only math which avoids python rounding errors above.
+        """
+        self._perform_reading()
+
+        # Force 32-bit boundaries on values undergoing bit-shifting
+        def force_int32(x):
+            x = int(x) & 0xFFFFFFFF
+            return x if x < 0x80000000 else x - 0x100000000
+
+        t_fine = int(self._t_fine)
+        press_raw = int(self._adc_pres)
+
+        # Cast calibration parameters to ints to prevent float promotion
+        p1, p2, p3, p4, p5, p6, p7, p8, p9, p10 = [int(p) for p in self._pressure_calibration[:10]]
+
+        var1 = force_int32(t_fine >> 1) - 64000
+
+        # var2 is now guaranteed to remain an integer here
+        var2 = force_int32((force_int32(var1 >> 2) * force_int32(var1 >> 2)) >> 11) * p6
+        var2 = force_int32(int(var2) >> 2) + (var1 * p5 * 2)
+        var2 = force_int32(int(var2) >> 2) + (p4 << 16)
+
+        var1_parts = force_int32((force_int32(var1 >> 2) * force_int32(var1 >> 2)) >> 13) * (p3 << 5)
+        var1 = force_int32((var1_parts >> 3) + ((p2 * var1) >> 1)) >> 18
+        var1 = force_int32(32768 + var1) * p1 >> 15
+
+        if var1 == 0:
+            return 0.0  # Guard against division by zero
+
+        press_comp = (1048576 - press_raw) - (int(var2) >> 12)
+        press_comp = (press_comp * 3125) & 0xFFFFFFFF
+
+        if press_comp >= (1 << 30):
+            press_comp = ((press_comp // var1) * 2) & 0xFFFFFFFF
+        else:
+            press_comp = ((press_comp * 2) // var1) & 0xFFFFFFFF
+
+        var1 = (p9 * (((press_comp >> 3) * (press_comp >> 3)) >> 13)) >> 12
+        var2 = ((press_comp >> 2) * p8) >> 13
+        press_shifted_8 = force_int32(press_comp >> 8)
+        var3 = (press_shifted_8 * press_shifted_8 * press_shifted_8 * p10) >> 17
+        press_comp = force_int32(press_comp + ((var1 + var2 + var3 + (p7 << 7)) >> 4))
+
+        # Convert Pa to hPa
+        return press_comp / 100.0
 
     @property
     def humidity(self):
@@ -232,13 +281,24 @@ class Adafruit_BME680:
         self._last_reading = time.ticks_ms()
         self._adc_pres = _read24(data[2:5]) / 16
         self._adc_temp = _read24(data[5:8]) / 16
+        self._adc_temp = int(_read24(data[5:8])) // 16
         self._adc_hum = struct.unpack('>H', bytes(data[8:10]))[0]
         self._adc_gas = int(struct.unpack('>H', bytes(data[13:15]))[0] / 64)
         self._gas_range = data[14] & 0x0F
-        var1 = (self._adc_temp / 8) - (self._temp_calibration[0] * 2)
-        var2 = (var1 * self._temp_calibration[1]) / 2048
-        var3 = ((var1 / 2) * (var1 / 2)) / 4096
-        var3 = (var3 * self._temp_calibration[2] * 16) / 16384
+
+        # var1 = (self._adc_temp / 8) - (self._temp_calibration[0] * 2)
+        # var2 = (var1 * self._temp_calibration[1]) / 2048
+        # var3 = ((var1 / 2) * (var1 / 2)) / 4096
+        # var3 = (var3 * self._temp_calibration[2] * 16) / 16384
+        # self._t_fine = int(var2 + var3)
+
+        # Use Bosch C Integer spec with Python integer math
+        par_t1 = int(self._temp_calibration[0])
+        par_t2 = int(self._temp_calibration[1])
+        par_t3 = int(self._temp_calibration[2])
+        var1 = (self._adc_temp  >> 3) - (par_t1 << 1)
+        var2 = (var1 * par_t2) >> 11
+        var3 = ((((var1 >> 1) * (var1 >> 1)) >> 12) * (par_t3 << 4)) >> 14
         self._t_fine = int(var2 + var3)
 
     def _read_calibration(self):

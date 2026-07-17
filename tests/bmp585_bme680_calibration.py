@@ -26,6 +26,15 @@ bme680 driver code:
 my home office is ~361 feet elevation, first bme680 says 303.5 feet (+57.5' correction needed)
 my garage is at <todo> feet elevation
 
+TODO: debug why nearly perfect 1.0HPA diff between sensors
+BMP585 Pressure = 1004.3317188 hPa, 28.0820312°C
+BME680 Pressure = 1005.4100000 hPa, 33.8528516°C
+BME680 FP Pressure = 1005.3974894 hPa, temp Diff = 5.7708203°C diff
+
+Diff = 1.0782812 diff in hpa
+
+INT vs. FP implementation Diff = 0.0125106 diff in hpa
+
 
 """
 
