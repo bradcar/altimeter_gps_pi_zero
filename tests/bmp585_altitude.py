@@ -2,7 +2,7 @@ import time
 
 from lib.micropython_bmpxxx import bmpxxx
 from lib.pi_zero_utils import pico_temperature, scan_i2c_bus
-from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
+from lib.pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 
 
 # -------------------------------------------------------------------------
@@ -14,7 +14,7 @@ def main():
         pi_celsius = pico_temperature() or 0.0
         print(f"Pi Celsius = {pi_celsius:.1f}° C\n")
 
-        # Initialize the driver using  hardware bridge compatibility layer
+        # Initialize the driver using hardware bridge compatibility layer
         bmp = bmpxxx.BMP585(i2c=i2c1, address=0x47)
 
         # Configure OverSampling and IIR filter settings

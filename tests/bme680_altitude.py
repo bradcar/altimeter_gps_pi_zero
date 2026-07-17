@@ -101,8 +101,6 @@ def main():
         bme = BME680_I2C(i2c=i2c1, address=0x77)
         print("Done initializing I2C Bridge\n")
 
-        scan_i2c_bus(i2c1)
-
         # Baseline settings
         sea_level_pressure_hpa = 1012.90
         print(f"Initial sea_level_pressure = {sea_level_pressure_hpa:.2f} hPa")
@@ -112,13 +110,12 @@ def main():
         bme.altitude = home_office_alt_meters
         print(f"Altitude set to = {bme.altitude:.2f} meters")
 
-        # Retrieve the dynamically adjusted sea level pressure from the driver
+        # Retrieve the adjusted sea level pressure from the driver
         sea_level_pressure_hpa = bme.sea_level_pressure
         print(f"Adjusted SLP based on known altitude = {sea_level_pressure_hpa:.2f}")
 
         print("\nStart test Loop")
 
-        # State tracking variables
         last_ts_ns = time.perf_counter_ns()
         last_pressure = bme.pressure
 
