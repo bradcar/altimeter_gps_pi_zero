@@ -915,7 +915,7 @@ class BMP280(BMP581):
         self._read_calibration_bmp280()
 
         # To start measurements: temp OSR1, pressure OSR1 must be init with Normal power mode
-        # set all values at onc
+        # set all values at once
         self._config_register = 0x00
         self._control_register = (self._translate_osr_bmp280(BMP581.OSR1) << 5) + (
                 self._translate_osr_bmp280(BMP581.OSR1) << 2) + self.BMP280_NORMAL_POWER
