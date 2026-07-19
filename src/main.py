@@ -1,6 +1,22 @@
 # altimeter_gps.py
 """
 Raspberry Pi Zero: Altimeter = Elevation & sea level pressure adjust
+
+Sensors used
+    - BMP585 highly accurate pressure & altitude
+    - BME680 temp, humidity, pressure, IAQ, altitude
+    - Rotary encoder to adjust alt and or pressure, switch toggle for larger increments
+    - Eink display 240px x 122px
+    - Touch display 5 points
+    - Metric/Imperial switch
+
+Use sea level pressure at nearest airport
+
+Use nearest airport for sea level pressure
+    Portland updated hourly (7 min before the hour)
+        https://www.weather.gov/wrh/timeseries?site=KPDX
+
+todo if press set altitude, before first display, altitude_m is undefined, check others
 """
 
 import os
@@ -10,22 +26,30 @@ from time import sleep as zzz
 
 from PIL import ImageFont
 from gpiozero import Button, RotaryEncoder
+from numpy.random import bit_generator
 
-from barometer_utils import bmp585_sensor, bme680_sensor, calc_sea_level_pressure
+from barometer_utils import calc_sea_level_pressure, bme_hpa_correction, calc_altitude
 from lib.bme680 import BME680_I2C
-from lib.bme680_utils import iaq_quality_to_string
+from lib.bme680_utils import iaq_quality_to_string, calculate_iaq
 from lib.eink_ssd1680_utils import init_eink_display, refresh_eink_display
 from lib.micropython_bmpxxx import bmpxxx
 from lib.pi_zero_i2c_bridge_utils import PiZeroI2CBridge
-from lib.pi_zero_utils import pico_temperature, scan_i2c_bus
+from lib.pi_zero_utils import pi_on_chip_temperature, scan_i2c_bus
 from metric_imperial_utils import feet_to_meters, metric_format, altitude_to_string
 
 DEBUG = True
-
 DISP_WIDTH = 128
 DISP_HEIGHT = 64
-DWELL_MS_LOOP = 300
 OVER_TEMP_WARNING = 70.0
+
+# Timing Constants (in seconds)
+LOOP_STRETCH_SLEEP = 0.1      # Small sleep each loop
+SENSOR_INTERVAL_SEC = 2.0      # Read core pressure, temp, & other metrics every 2 seconds
+EINK_INTERVAL_SEC = 5.0        # Limit E-ink refresh to every 5 seconds
+GAS_INTERVAL_SEC = 30.0        # Read heavy gas IAQ metrics every 30 seconds
+GPS_INTERVAL_SEC = 30.0        # Read heavy GPS metrics every 30 seconds
+
+INIT_SEA_LEVEL_PRESSURE = 1018.10
 
 implementation = [sys.implementation.name]
 
@@ -36,7 +60,7 @@ def uname():
 
 
 # Buttons
-# todo ignore Button 1: cm/in toggle (GPIO 6)
+# TODO ignore Button 1: cm/in toggle (GPIO 6)
 # Button 2: Adjust altitude/SLP (GPIO 5)
 #           E-ink: "Up" Button: actually GPIO 6 NOT GPIO 5
 # Button 3: Detail/Summary layout toggle (GPIO 15)
@@ -56,7 +80,9 @@ button_3_pushed = False
 # buzzer = ??
 
 # Initialize the SSD1680 e-ink hardware & Pillow canvas
+print("Initialize Eink...")
 epd_disp, epd_draw, epd_font_small, epd_image = init_eink_display()
+print("Initialized Eink.")
 
 # Load custom font sizes using Pillow
 try:
@@ -186,31 +212,15 @@ def altitude_reference_splash(is_metric):
 
 
 # Definition with parameters instead of global dependencies:
-def adjust_altitude_slp(buzz, bmp_update, is_metric, altitude_m, pressure_hpa,
-                        slp_hpa_bme680, slp_hpa_bmp585, cal_bme680, cal_bmp585):
+def adjust_altitude_slp(buzz, bmp_update, is_metric, altitude_m, pressure_hpa, sea_level_pressure_hpa):
     """
     Adjust the altitude in the desired metric, use it to return a new Sea Level Pressure (SLP)
-    :param buzz:
-    :param bmp_update:
-    :param is_metric:
-    :param altitude_m:
-    :param pressure_hpa:
-    :param slp_hpa_bme680:
-    :param slp_hpa_bmp585:
-    :param cal_bme680:
-    :param cal_bmp585:
-    :return:
     """
     new_alt = altitude_m
-    if bmp_update:
-        adjust = cal_bmp585
-        new_slp = slp_hpa_bmp585 - adjust
-    else:
-        adjust = cal_bme680
-        new_slp = slp_hpa_bme680 - adjust
+    new_slp = sea_level_pressure_hpa
 
     print(f"Adjustment start: alt= {new_alt} m, {new_alt * 3.28084} ft")
-    update_settings_display(new_alt, new_slp, is_metric)
+    show_updated_altitude_display(new_alt, new_slp, is_metric)
 
     rotary_multiplier = 1
     rotary_old = encoder.steps
@@ -232,8 +242,8 @@ def adjust_altitude_slp(buzz, bmp_update, is_metric, altitude_m, pressure_hpa,
             rotary_old = rotary_new
 
         new_alt = new_alt_feet / 3.28084
-        new_slp = calc_sea_level_pressure(pressure_hpa, new_alt) - adjust
-        update_settings_display(new_alt, new_slp, is_metric)
+        new_slp = calc_sea_level_pressure(pressure_hpa, new_alt)
+        show_updated_altitude_display(new_alt, new_slp, is_metric)
 
     with open("last-sea-level-pressure.txt", "w") as data_file:
         data_file.write(f"{new_slp}")
@@ -241,7 +251,7 @@ def adjust_altitude_slp(buzz, bmp_update, is_metric, altitude_m, pressure_hpa,
     return new_slp
 
 
-def update_settings_display(alt, press):
+def show_updated_altitude_display(alt, press, is_metric):
     """
     Update settings
     """
@@ -249,34 +259,31 @@ def update_settings_display(alt, press):
 
     convert, unit = metric_format(is_metric)
 
-    epd_draw.text((10, 8), "SETTING ALTITUDE...", font=font_small, fill=255)
+    epd_draw.text((10, 8), "Setting Altitude...", font=font_small, fill=255)
     epd_draw.line((10, 26, 240, 26), fill=255, width=1)
 
     # New Altitude Data
     # Small stacked labels on the left side
-    epd_draw.text((15, 38), "NEW", font=font_small, fill=255)
-    epd_draw.text((15, 52), "ALT", font=font_small, fill=255)
+    epd_draw.text((23, 38), "New", font=font_small, fill=255)
+    epd_draw.text((23, 52), "Alt", font=font_small, fill=255)
     # Big target value on the right side
-    alt_val = f"{(alt * convert):.0f}{unit}"
-    epd_draw.text((85, 38), alt_val, font=font_big, fill=255)
+    alt_val = f"{(alt * convert):.3f}{unit}"
+    epd_draw.text((68, 38), alt_val, font=font_big, fill=255)
 
     # Sea Level Pressure Data
     # Small stacked labels on the left side
-    epd_draw.text((15, 78), "SEA", font=font_small, fill=255)
-    epd_draw.text((15, 92), "hPA", font=font_small, fill=255)
+    epd_draw.text((23, 78), "Sea", font=font_small, fill=255)
+    epd_draw.text((23, 92), "hPA", font=font_small, fill=255)
     # Big target value on the right side
-    press_val = f"{press:.1f}"
-    epd_draw.text((85, 78), press_val, font=font_big, fill=255)
+    press_val = f"{press:.4f}"
+    epd_draw.text((68, 78), press_val, font=font_big, fill=255)
 
     # Push visual updates (use partial refresh for fast response during rotation)
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=True)
     return
 
 
-
-
 def display_altimeter_details(buzz, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric):
-
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
     epd_draw.text((3, 5), "Altimeter Details", font=font_small, fill=0)
     epd_draw.line((5, 21, 240, 21), fill=0, width=1)
@@ -350,9 +357,6 @@ def display_big_dashboard(buzz, altitude_m, pressure_hpa, iaq, is_metric):
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=True)
 
 
-
-
-
 def main():
     global SLP_CALIBRATION_BMP585, SLP_CALIBRATION_BME680, i2c1, sea_level_pressure, slp_hpa_bmp585, slp_hpa_bme680
     show_env_details = False
@@ -360,16 +364,12 @@ def main():
     buzzer_sound = True
     is_metric = True
 
-    INIT_SEA_LEVEL_PRESSURE = 1018.10
-    SLP_CALIBRATION_BMP585 = -0.1931
-    SLP_CALIBRATION_BME680 = 1.0147
-
     warning_toggle = 0
 
     print("Starting...")
     print("=================================================")
     print(implementation[0], uname()[3], "\nrun on", uname()[4])
-    temp = pico_temperature()
+    temp = pi_on_chip_temperature()
     print(f"on-chip Pi Zero temp = {temp:.1f}°C")
     print("=================================================")
 
@@ -380,19 +380,23 @@ def main():
     error_bmp585 = False
     try:
         bme = BME680_I2C(i2c=i2c1, address=0x77)
+        bme_exists = True
         print("BME680 initialized")
     except Exception as e:
         error_bme680 = True
+        bme_exists = False
         print(f"ERROR: init BME680_I2C(i2c=i2c, address=0x77): {e}")
 
     try:
         bmp = bmpxxx.BMP585(i2c=i2c1, address=0x47)
+        bmp_exists = True
         bmp.pressure_oversample_rate = bmp.OSR128
         bmp.temperature_oversample_rate = bmp.OSR8
         bmp.iir_coefficient = bmp.COEF_7
         print("BMP585 initialized\n")
 
     except Exception as e:
+        bmp_exists = False
         error_bmp585 = True
         print(f"ERROR: init bmp58x.BMP585(i2c=i2c, address=0x47): {e}")
 
@@ -405,8 +409,16 @@ def main():
         print(f"No previous sea level pressure stored in file")
         print(f"Using program sea level pressure in constant ={sea_level_pressure}")
 
-    slp_hpa_bmp585 = sea_level_pressure + SLP_CALIBRATION_BMP585
-    slp_hpa_bme680 = sea_level_pressure + SLP_CALIBRATION_BME680
+    average_diff = 1.0312750 # fallback hPa correction for BME680
+    if bmp_exists and bmp_exists:
+        average_diff = bme_hpa_correction(bme, bmp, 25)
+    if bme_exists:
+        # the amount over will be subtracted in calibration code.
+        bme.hpa_calibration = average_diff
+        if bme.hpa_calibration is not None:
+            print(f"BME680 hpa_calibration = {bme.hpa_calibration:.7f} hPa")
+        else:
+            print(f"ERROR IN BME680 hpa_calibration = None!")
 
     # if buzzer_sound: buzzer.on()
     # zzz(.2)
@@ -416,22 +428,39 @@ def main():
 
     # main loop variables
     last_eink_update = time.ticks_ms()
-    UPDATE_INTERVAL_MS = 5000  # limit Eink refresh to once every 5 seconds
 
     # Store previous values to detect actual changes
     prev_alt = None
     prev_press = None
 
-    # main loop
-    print("start of main loop\n")
-    first_run = True
-    time_since_last_temp_update = ticks_ms()
 
+    first_run = True
+    # Initialize timing trackers using time.monotonic()
+    current_time = time.monotonic()
+    last_sensor_time = 0.0  # Force instant execution on the first loop
+    last_gas_time = current_time
+    last_eink_time = current_time
+    last_gps_time = current_time
+
+    # Initialize metrics
+    altitude_m = 0.0
+    pressure_hpa = 1013.25
+    temp_c = 20.0
+    bme_percent_humidity = None
+    bme_iaq = None
+    iaq = None
+    humidity = None
+
+    prev_alt = None
+    prev_press = None
+    first_run = True
+
+    print("start of main loop\n")
+
+    # main loop
     while True:
-        dwell = DWELL_MS_LOOP
-        loop_time = ticks_ms()
-        elapsed_time = ticks_diff(ticks_ms(), time_since_last_temp_update)
-        if DEBUG: print(f"Time since last temp ={elapsed_time}")
+        start_loop_tick = time.monotonic()
+        current_time = time.monotonic()
 
         if button1():
             is_metric = not is_metric
@@ -443,95 +472,92 @@ def main():
                 is_metric=is_metric,
                 altitude_m=altitude_m,
                 pressure_hpa=pressure_hpa,
-                slp_hpa_bme680=slp_hpa_bme680,
-                slp_hpa_bmp585=slp_hpa_bmp585,
-                cal_bme680=SLP_CALIBRATION_BME680,
-                cal_bmp585=SLP_CALIBRATION_BMP585
+                sea_level_pressure_hpa=sea_level_pressure,
             )
-            # Recalculate local variables based on the new returned value
-            slp_hpa_bmp585 = sea_level_pressure + SLP_CALIBRATION_BMP585
-            slp_hpa_bme680 = sea_level_pressure + SLP_CALIBRATION_BME680
 
         if button3():
             show_env_details = not show_env_details
 
-        if first_run or elapsed_time > 2000:
-            dwell = DWELL_MS_LOOP - 189
-            time_since_last_temp_update = ticks_ms()
+        # Temperature and standard ambient metrics (Every 2 seconds)
+        if (current_time - last_sensor_time) >= SENSOR_INTERVAL_SEC or first_run:
+            last_sensor_time = current_time
 
-            temp = pico_temperature()
+            if DEBUG:
+                print(f"Reading standard sensors at {current_time:.2f}s")
+
+            temp = pi_on_chip_temperature()
             if temp > OVER_TEMP_WARNING:
-                print(f"WARNING: on-chip Pi Zero temp = {temp:.1f}° C")
-
-            slp_hpa_bmp585 = sea_level_pressure + SLP_CALIBRATION_BMP585
-            slp_hpa_bme680 = sea_level_pressure + SLP_CALIBRATION_BME680
+                print(f"WARNING: Pi Zero on-chip temp = {temp:.1f}° C")
 
             if error_bme680:
                 print(f"No lower-precision Altitude BME680 sensor: {error_bme680}\n")
             else:
-                temp_c_bme680, humidity_bme680, hpa_bme680, iaq_bme680, alt_m_bme680, error_bme680 = bme680_sensor(
-                    bme, slp_hpa_bme680, debug=DEBUG)
+                # IAQ Readings (Every 30 seconds), heats chip substrate
+                if (current_time - last_gas_time) >= GAS_INTERVAL_SEC:
+                    last_gas_time = current_time
+                    print(f"\nBME680 Gas measurement (every {GAS_INTERVAL_SEC:.0f}s)")
+                    gas_ohms = bme.gas
+                    bme_percent_humidity = bme.humidity
+                    bme_iaq = calculate_iaq(gas_ohms, bme_percent_humidity)
+                    print(f"IAQ = {bme_iaq:.1f} ({iaq_quality_to_string(bme_iaq)}), {gas_ohms / 1000.0} Kohms")
+                else:
+                    # Trigger non-gas measurement to cache other BME metrics
+                    bme_percent_humidity = bme.humidity
 
-            first_run = False
+                bme_hpa = bme.pressure
+                bme_temp = bme.temperature
+                bme_meters = calc_altitude(bme_hpa, sea_level_pressure)
+
+                # if BMP present use it as gold standard for pressure, temp, and altitude
+                temp_c = bme_temp
+                humidity = bme_percent_humidity
+                altitude_m = bme_meters
+                pressure_hpa = bme_hpa
+                iaq = bme_iaq
 
             if error_bmp585:
                 print(f"No high-precision Altitude bmp585 sensor\n")
-            else:
-                temp_c_bmp585, hpa_bmp585, alt_m_bmp585, error_bmp585 = bmp585_sensor(bmp, slp_hpa_bmp585, debug=DEBUG)
-
-            temp_c, humidity, pressure_hpa, iaq, altitude_m, temp_f = (None,) * 6
 
             if error_bme680 and error_bmp585:
-                print("Error, 0, 0, 1")
-                print(f"OLED: No Alt Sensors:, 5, 12, 0")
-                print(f"OLED: BMP585 & BME680, 5, 21, 0")
+                print("Critical Error: No altitude sensors available.")
                 break
 
-            if not error_bme680:
-                temp_c = temp_c_bme680
-                humidity = humidity_bme680
-                altitude_m = alt_m_bme680
-                pressure_hpa = hpa_bme680
-                iaq = iaq_bme680
-
-            if not error_bmp585:
-                temp_c = temp_c_bmp585
-                altitude_m = alt_m_bmp585
-                pressure_hpa = hpa_bmp585
-            temp_f = (temp_c * 9.0 / 5.0) + 32.0
             first_run = False
 
-        time.sleep_ms(dwell)
+        # E-ink Display Refresh (Every 5 seconds)
+        if (current_time - last_eink_time) >= EINK_INTERVAL_SEC:
+            # TODO validate if this is what we want
+            # Determine if values changed significantly
+            values_changed = False
+            if prev_alt is None or abs(altitude_m - prev_alt) > 0.05 or abs(pressure_hpa - prev_press) > 0.02:
+                values_changed = True
 
-        # Check if we should refresh Eink
-        now = time.ticks_ms()
-        time_since_refresh = time.ticks_diff(now, last_eink_update)
+            # Instant trigger if a button action set a flag
+            button_pressed = button_1_pushed or button_2_pushed or button_3_pushed
 
-        # todo: is this correct? Determine if values changed significantly
-        values_changed = False
-        if prev_alt is None or abs(altitude_m - prev_alt) > 0.05 or abs(pressure_hpa - prev_press) > 0.02:
-            values_changed = True
+            if values_changed or button_pressed:
+                last_eink_time = current_time  # Reset timer if push pixels
+                prev_alt = altitude_m
+                prev_press = pressure_hpa
 
-        # Check if a button was pressed (which requires instant visual feedback)
-        button_pressed = button_1_pushed or button_2_pushed or button_3_pushed
+                buzzer_sound = None
+                if show_env_details:
+                    display_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric)
+                else:
+                    display_big_dashboard(buzzer_sound, altitude_m, pressure_hpa, iaq, is_metric)
 
-        # Trigger refresh ONLY if interval has elapsed AND (data changed OR button was pressed)
-        if time_since_refresh >= UPDATE_INTERVAL_MS and (values_changed or button_pressed):
+        # Loop cadence control
+        # Optional stretch sleep to keep CPU utilization reasonable
+        if LOOP_STRETCH_SLEEP > 0:
+            time.sleep(LOOP_STRETCH_SLEEP)
 
-            # Save state to prevent double fires
-            prev_alt = altitude_m
-            prev_press = pressure_hpa
-            last_eink_update = now
+        # Calculate loop execution time
+        end_loop_tick = time.monotonic()
+        loop_duration = end_loop_tick - start_loop_tick
 
-            # todo buzzer_sound
-            buzzer_sound = None
-            if show_env_details:
-                display_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric)
-
-            else:
-                display_big_dashboard(buzzer_sound, altitude_m, pressure_hpa, iaq, is_metric)
-
-
+        # Loop duration is 50 ms to 60 ms
+        # if DEBUG:
+        #     print(f"Loop cycle duration: {loop_duration * 1000:.2f} ms")
 
 
 if __name__ == "__main__":
