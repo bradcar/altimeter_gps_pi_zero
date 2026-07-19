@@ -64,6 +64,7 @@ _LOOKUP_TABLE_1 = (2147483647.0, 2147483647.0, 2147483647.0, 2147483647.0, 21474
 _LOOKUP_TABLE_2 = (4096000000.0, 2048000000.0, 1024000000.0, 512000000.0, 255744255.0, 127110228.0,
                    64000000.0, 32258064.0, 16016016.0, 8000000.0, 4000000.0, 2000000.0, 1000000.0,
                    500000.0, 250000.0, 125000.0)
+_BME680_HPA_CALIBRATION_OFFSET = 0.0
 
 
 def _read24(arr):
@@ -97,6 +98,7 @@ class Adafruit_BME680:
         self._t_fine = None
         self._last_reading = 0
         self._min_refresh_time = 1000 / refresh_rate
+        self._hpa_calibration_offset = _BME680_HPA_CALIBRATION_OFFSET
 
     @property
     def pressure_oversample(self):
@@ -217,7 +219,7 @@ class Adafruit_BME680:
         press_comp = force_int32(press_comp + ((var1 + var2 + var3 + (p7 << 7)) >> 4))
 
         # Convert Pa to hPa
-        return press_comp / 100.0
+        return (press_comp / 100.0) - self._hpa_calibration_offset
 
     @property
     def humidity(self):
@@ -242,6 +244,19 @@ class Adafruit_BME680:
             calc_hum = 0
         return calc_hum
 
+
+    @property
+    def hpa_calibration(self):
+        return self._hpa_calibration_offset
+
+    @hpa_calibration.setter
+    def hpa_calibration(self, value):
+        # limit amount of hPa Adjustment, return None if outside this range
+        if abs(value) < 10.0:
+            self._hpa_calibration_offset = value
+        else:
+            self._hpa_calibration_offset = 0.0
+
     @property
     def altitude(self):
         pressure = self.pressure
@@ -254,49 +269,59 @@ class Adafruit_BME680:
 
     @property
     def gas(self):
-        self._perform_reading()
+        self._perform_reading(read_gas=True)
         var1 = ((1340 + (5 * self._sw_err)) * (_LOOKUP_TABLE_1[self._gas_range])) / 65536
         var2 = ((self._adc_gas * 32768) - 16777216) + var1
         var3 = (_LOOKUP_TABLE_2[self._gas_range] * var1) / 512
         calc_gas_res = (var3 + (var2 / 2)) / var2
         return int(calc_gas_res)
 
-    def _perform_reading(self):
-        if (time.ticks_diff(self._last_reading, time.ticks_ms()) * time.ticks_diff(0, 1)
-                < self._min_refresh_time):
-            return
+    def _perform_reading(self, read_gas=False):
+        # Allow reading standard metrics faster if read_gas is False
+        min_refresh = self._min_refresh_time if read_gas else 100  # 100ms for fast TP reads
+
+        # FIX: Bypass the cache check if an explicit gas burn is requested.
+        # Otherwise, reading humidity/pressure right before gas will choke the cycle.
+        if not read_gas:
+            if (time.ticks_diff(self._last_reading, time.ticks_ms()) * time.ticks_diff(0, 1)
+                    < min_refresh):
+                return
+
         self._write(_BME680_REG_CONFIG, [self._filter << 2])
         self._write(_BME680_REG_CTRL_MEAS,
                     [(self._temp_oversample << 5) | (self._pressure_oversample << 2)])
         self._write(_BME680_REG_CTRL_HUM, [self._humidity_oversample])
-        self._write(_BME680_REG_CTRL_GAS, [_BME680_RUNGAS])
+
+        # Conditionally trigger gas heater profile
+        if read_gas:
+            self._write(_BME680_REG_CTRL_GAS, [_BME680_RUNGAS])
+        else:
+            self._write(_BME680_REG_CTRL_GAS, [0x00])  # Keep gas heater shut down
+
+        # Set to forced mode - this kicks off the internally timed measurement and gas heat sequence
         ctrl = self._read_byte(_BME680_REG_CTRL_MEAS)
         ctrl = (ctrl & 0xFC) | 0x01
         self._write(_BME680_REG_CTRL_MEAS, [ctrl])
+
+        # This loop dynamically waits out the internal heating/sampling profile
         new_data = False
         while not new_data:
             data = self._read(_BME680_REG_MEAS_STATUS, 15)
             new_data = data[0] & 0x80 != 0
             time.sleep(0.005)
+
         self._last_reading = time.ticks_ms()
         self._adc_pres = _read24(data[2:5]) / 16
-        self._adc_temp = _read24(data[5:8]) / 16
         self._adc_temp = int(_read24(data[5:8])) // 16
         self._adc_hum = struct.unpack('>H', bytes(data[8:10]))[0]
         self._adc_gas = int(struct.unpack('>H', bytes(data[13:15]))[0] / 64)
         self._gas_range = data[14] & 0x0F
 
-        # var1 = (self._adc_temp / 8) - (self._temp_calibration[0] * 2)
-        # var2 = (var1 * self._temp_calibration[1]) / 2048
-        # var3 = ((var1 / 2) * (var1 / 2)) / 4096
-        # var3 = (var3 * self._temp_calibration[2] * 16) / 16384
-        # self._t_fine = int(var2 + var3)
-
         # Use Bosch C Integer spec with Python integer math
         par_t1 = int(self._temp_calibration[0])
         par_t2 = int(self._temp_calibration[1])
         par_t3 = int(self._temp_calibration[2])
-        var1 = (self._adc_temp  >> 3) - (par_t1 << 1)
+        var1 = (self._adc_temp >> 3) - (par_t1 << 1)
         var2 = (var1 * par_t2) >> 11
         var3 = ((((var1 >> 1) * (var1 >> 1)) >> 12) * (par_t3 << 4)) >> 14
         self._t_fine = int(var2 + var3)
