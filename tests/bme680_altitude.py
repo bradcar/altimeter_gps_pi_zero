@@ -15,7 +15,7 @@ import time
 from math import log
 
 from bme680 import BME680_I2C
-from lib.pi_zero_utils import pico_temperature, scan_i2c_bus
+from lib.pi_zero_utils import pi_on_chip_temperature, scan_i2c_bus
 from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 
 DEBUG = True
@@ -92,7 +92,7 @@ def main():
     scan_i2c_bus(i2c1)
 
     try:
-        pi_celsius = pico_temperature() or 0.0
+        pi_celsius = pi_on_chip_temperature() or 0.0
         print(f"Pi Celsius = {pi_celsius:.1f}° C\n")
 
         print("Initializing I2C Bridge...")

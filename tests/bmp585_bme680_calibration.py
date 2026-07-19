@@ -50,33 +50,17 @@ TODO: all calibarion offset to BMP585 code
 
 import time
 import logging
-from math import log
 
 from barometer_utils import bme_hpa_correction
 from bme680 import BME680_I2C
+from bme680_utils import calculate_iaq
 from lib.micropython_bmpxxx import bmpxxx
-from lib.pi_zero_utils import pico_temperature, scan_i2c_bus
+from lib.pi_zero_utils import pi_on_chip_temperature, scan_i2c_bus
 from lib.bme680_utils import iaq_quality_to_string
 from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 
 DEBUG = False
 GAS_INTERVAL_SEC = 30.0
-
-
-def calculate_iaq(gas_ohms, percent_humidity):
-    if 0 <= percent_humidity <= 40:
-        humidity_score = 25.0 * ((40 - percent_humidity) / 40) ** 2
-    elif 40 < percent_humidity <= 60:
-        humidity_score = 0.0
-    elif 60 < percent_humidity <= 100:
-        humidity_score = 25.0 * ((percent_humidity - 60) / 40) ** 2
-    else:
-        humidity_score = None
-
-    ln_iaq = log(gas_ohms)
-    iaq = (9.4751 * ln_iaq ** 2 - 316.31 * ln_iaq + 2524.0) + 6 * humidity_score
-    return max(0, min(500.0, iaq))
-
 
 # -------------------------------------------------------------------------
 def main():
@@ -87,7 +71,7 @@ def main():
     scan_i2c_bus(i2c1)
 
     try:
-        pi_celsius = pico_temperature() or 0.0
+        pi_celsius = pi_on_chip_temperature() or 0.0
         print(f"Pi Zero chip Celsius = {pi_celsius:.1f}° C\n")
 
         try:

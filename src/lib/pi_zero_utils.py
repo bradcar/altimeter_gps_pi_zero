@@ -17,7 +17,7 @@ from contextlib import contextmanager
 logger = logging.getLogger(__name__)
 
 
-def pico_temperature() -> float:
+def pi_on_chip_temperature() -> float:
     try:
         with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
             # Read milli-celsius string ("43500")
