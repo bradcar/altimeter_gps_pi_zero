@@ -8,8 +8,13 @@ Temperature:
 Time-out:
     time_out(): wrapper to timeout number of seconds.
 """
+import logging
 import signal
 from contextlib import contextmanager
+
+# Calling script should setup:
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 def pico_temperature() -> float:
@@ -17,13 +22,15 @@ def pico_temperature() -> float:
         with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
             # Read milli-celsius string ("43500")
             raw_temp = f.read().strip()
-            return float(raw_temp) / 1000.0
+            celsius = float(raw_temp) / 1000.0
+            logger.info(f"Pi Zero on-chip Temperature: {celsius}° C")
+            return celsius
     except (FileNotFoundError, ValueError, IOError):
         return 0.0
 
 
 def scan_i2c_bus(i2c_primary):
-    print("I2C device Scan...")
+    logger.info("I2C device Scan...")
     lis3mdl_detected = None
     oled_detected = None
     bmp_detected = None
@@ -32,32 +39,37 @@ def scan_i2c_bus(i2c_primary):
     try:
         devices1 = i2c_primary.scan()
         if not devices1:
-            print("Error: No I2C1 devices detected (primary). Check your wiring")
-        else:
-            print(f"\nFound I2C1 {len(devices1)} device(s):")
-            for address in devices1:
-                print(f" I2C1 Device: Hex: {hex(address)} ({address})")
-                if address == 0x47 or address == 0x46:
-                    print(" -> likely BMP585/581 pressure Sensor")
-                    bmp_detected = True
-                elif address == 0x7f or address == 0x7e:
-                    print(" -> likely BMP390 pressure Sensor")
-                    bmp_detected = True
-                elif address == 0x77 or address == 0x76:
-                    print(" -> likely BME680 or BMP280 or BME280 pressure Sensor")
-                    bmp_detected = True
-                    bme_detected = True
-                elif address == 0x3C:
-                    print(" -> likely SSD1305 OLED display")
-                    oled_detected = True
-                elif address == 0x1C or address == 0x1E:
-                    print(" -> likely LIS3MDL Magnetometer")
-                    lis3mdl_detected = address
-                else:
-                    print(f" -> unknown device")
+            logger.error("No I2C1 devices detected (primary). Check your wiring.")
+            return None
+
+        logger.info(f"Found {len(devices1)} I2C1 {'device' if len(devices1) == 1 else 'devices'}:")
+        for address in devices1:
+            addr_hex = hex(address)
+
+            if address in (0x47, 0x46):
+                identity = "likely BMP585/581 pressure Sensor"
+                bmp_detected = True
+            elif address in (0x7f, 0x7e):
+                identity = "likely BMP390 pressure Sensor"
+                bmp_detected = True
+            elif address in (0x77, 0x76):
+                identity = "likely BME680 or BMP280/BME280 pressure Sensor"
+                bmp_detected = True
+                bme_detected = True
+            elif address == 0x3C:
+                identity = "likely SSD1305 OLED display"
+                oled_detected = True
+            elif address in (0x1C, 0x1E):
+                identity = "likely LIS3MDL Magnetometer"
+                lis3mdl_detected = address
+            else:
+                identity = "unknown device signature"
+
+            logger.info(f"  Device: Hex: {addr_hex} ({address}) -> {identity}")
+
     except RuntimeError as e:
-        print(f"I2C Hardware Error: {e}")
-    print("\n")
+        logger.error(f"I2C Hardware Error during scan: {e}")
+
     return None
 
 
