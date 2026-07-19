@@ -19,34 +19,48 @@ Portland - PDX airport sea level pressure updated every hour
     * https://www.portlandmaps.com/detail/benchmarks/-13648790.370985914_5715807.620158344_xy/
     * BM #4052 27.251'
 
-
 bme680 driver code:
    https://github.com/robert-hh/BME680-Micropython
 
 my home office is ~361 feet elevation, first bme680 says 303.5 feet (+57.5' correction needed)
 my garage is at <todo> feet elevation
 
-TODO: debug why nearly perfect 1.0HPA diff between sensors
-BMP585 Pressure = 1004.3317188 hPa, 28.0820312°C
-BME680 Pressure = 1005.4100000 hPa, 33.8528516°C
-BME680 FP Pressure = 1005.3974894 hPa, temp Diff = 5.7708203°C diff
-
-Diff = 1.0782812 diff in hpa
-
-INT vs. FP implementation Diff = 0.0125106 diff in hpa
 
 
+
+BME IAQ:      0- 50 good
+             51-100 average
+            101-150 poor
+            151-200 bad
+            201-300 worse
+            301-500 very bad
+Orignal reference:
+    https://github.com/thstielow/raspi-bme680-iaq
+    I fit my own 2d surface to create an IAQ approximation
+
+TODO: debug BME680 is nearly perfect 1.0 hPa higher than BMP585 sensors
+    BME680 hpa_calibration = 1.0181000 hPa
+    BMP585 Calibrated Pressure = 1005.9378125 hPa
+    BME680 Calibrated Pressure = 1006.9600000 hPa
+
+TODO: bmp680 code has calibration offset, how does this interact with SLP?
+
+TODO: all calibarion offset to BMP585 code
 """
 
 import time
+import logging
 from math import log
 
+from barometer_utils import bme_hpa_correction
 from bme680 import BME680_I2C
 from lib.micropython_bmpxxx import bmpxxx
 from lib.pi_zero_utils import pico_temperature, scan_i2c_bus
+from lib.bme680_utils import iaq_quality_to_string
 from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 
-DEBUG = True
+DEBUG = False
+GAS_INTERVAL_SEC = 30.0
 
 
 def calculate_iaq(gas_ohms, percent_humidity):
@@ -64,66 +78,36 @@ def calculate_iaq(gas_ohms, percent_humidity):
     return max(0, min(500.0, iaq))
 
 
-def bme_temp_humid_hpa_iaq_alt(bme, sea_level):
-    """
-    read temp, humidity, pressure, Indoor Air Quality (IAQ) from the BME680 sensor
-    measurement takes ~189ms
-     IAQ:     0- 50 good
-             51-100 average
-            101-150 poor
-            151-200 bad
-            201-300 worse
-            301-500 very bad
-    todo: add code to not trust IAQ until 300 cycles or about 30mins.
-          https://github.com/thstielow/raspi-bme680-iaq
-
-    :param :sea_level: sea level hpa from closest airport
-    :returns: temp_c, percent_humidity, hpa_pressure, iaq, meters, error string
-    """
-
-    try:
-        hpa_pressure = bme.pressure
-        temp_c = bme.temperature
-        percent_humidity = bme.humidity
-        gas_ohms = bme.gas  # Updated to match the Ohms divisor in your blueprint
-
-        # derived sensor data
-        meters = 44330.0 * (1.0 - (hpa_pressure / sea_level) ** (1.0 / 5.255))
-        iaq = calculate_iaq(gas_ohms, percent_humidity)
-
-        if DEBUG:
-            print(f"BME680 Pressure = {hpa_pressure:.2f} hPa")
-            print(f"BME680 Temp °C = {temp_c:.1f}° C")
-            print(f"BME680 Humidity = {percent_humidity:.1f}%")
-            print(f"BME680 Gas resistance = {gas_resist:.2f} Ohms")
-            print(f"BME680 iaq = {iaq:.2f},  IAQ lower better [0 to 500]")
-            print(f"BME680 Alt = {meters * 3.28084:.2f} feet \n")
-
-    except OSError as e:
-        print("BME680: Failed to read sensor.")
-        return None, None, None, None, None, "ERROR_BME680:" + str(e)
-
-    return temp_c, percent_humidity, hpa_pressure, iaq, meters, None
-
-
 # -------------------------------------------------------------------------
 def main():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger(__name__)
+
     i2c1 = PiZeroI2CBridge("/dev/i2c-1")
     scan_i2c_bus(i2c1)
 
     try:
         pi_celsius = pico_temperature() or 0.0
-        print(f"Pi Celsius = {pi_celsius:.1f}° C\n")
+        print(f"Pi Zero chip Celsius = {pi_celsius:.1f}° C\n")
 
-        bme = BME680_I2C(i2c=i2c1, address=0x77)
-        bmp = bmpxxx.BMP585(i2c=i2c1, address=0x47)
+        try:
+            bmp = bmpxxx.BMP585(i2c=i2c1, address=0x47)
+            print("BMP585 initialized successfully.")
+        except (RuntimeError, OSError) as e:
+            raise SystemExit("Exiting script due to missing or non-responsive BMP585.")
+
+        try:
+            bme = BME680_I2C(i2c=i2c1, address=0x77)
+            logger.info("BME680 initialized successfully.")
+        except (RuntimeError, OSError) as e:
+            raise SystemExit("Exiting script due to missing or non-responsive BME680.")
 
         # Configure OverSampling and IIR filter settings
         bmp.pressure_oversample_rate = bmp.OSR4
         bmp.temperature_oversample_rate = bmp.OSR4
         bmp.iir_coefficient = bmp.COEF_1
 
-        bme_hpa= bme.pressure
+        bme_hpa = bme.pressure
         bmp_hpa = bmp.pressure
 
         print(f"BMP585 Pressure = {bmp_hpa:.7f} hPa")
@@ -131,25 +115,20 @@ def main():
         diff = bme_hpa - bmp_hpa
         print(f"Diff = {diff:.7f} diff in hpa")
 
-        print(f"\nBME Altitude set to = {bme.altitude:.2f} meters")
-        print(f"BMP Altitude set to = {bmp.altitude:.2f} meters\n")
+        print(f"\nBME un-calibrated Altitude  = {bme.altitude:.2f} meters")
+        print(f"BMP un-calibrated Altitude = {bmp.altitude:.2f} meters\n")
 
+        average_diff = bme_hpa_correction(bme, bmp, 25)
+        print(f"AVE Diff = {average_diff:.7f} Average diff in hpa")
 
-        max_diff = diff
-        min_diff = diff
-        num = 25
-        print(f"Test {num} Iterations ")
-        for _ in range(25):
-            bme_hpa = bme.pressure
-            bmp_hpa = bmp.pressure
-            diff = bme_hpa - bmp_hpa
-            max_diff = max(max_diff, diff)
-            min_diff = min(min_diff, diff)
-            print(f"Diff = {diff:.7f} diff in hpa")
-            time.sleep(0.1)
+        bme.hpa_calibration = average_diff
+        if bme.hpa_calibration is not None:
+            print(f"BME680 hpa_calibration = {bme.hpa_calibration:.7f} hPa")
+        else:
+            print(f"ERROR IN BME680 hpa_calibration = None!")
 
-        print(f"\nMAX Diff = {max_diff:.7f} Maximum diff in hpa")
-        print(f"MIN Diff = {min_diff:.7f} Minimum diff in hpa")
+        print(f"BMP585 Calibrated Pressure = {bmp_hpa:.7f} hPa")
+        print(f"BME680 Calibrated Pressure = {bme_hpa:.7f} hPa")
 
         slp_bme_hpa = bme.sea_level_pressure
         slp_bmp_hpa = bmp.sea_level_pressure
@@ -158,11 +137,10 @@ def main():
 
         # Set to known altitude
         hundred_meters = 100.00
-        print(f"\nSet to know altitude of {hundred_meters}m")
-
-        bme.altitude =  hundred_meters
-        print(f"\nBME Altitude set to = {bme.altitude:.2f} meters")
-        bmp.altitude =  hundred_meters
+        print(f"\nSet to {hundred_meters}m altitude")
+        bme.altitude = hundred_meters
+        print(f"BME Altitude set to = {bme.altitude:.2f} meters")
+        bmp.altitude = hundred_meters
         print(f"BMP Altitude set to = {bmp.altitude:.2f} meters")
 
         slp_bme_hpa = bme.sea_level_pressure
@@ -172,34 +150,49 @@ def main():
         print(f"Adjusted Diff = {slp_bme_hpa - slp_bmp_hpa:.7f} diff in hpa\n")
 
         bme_hpa = bme.pressure
-        bme_fp_hpa = bme.pressure_fp
+
         bmp_hpa = bmp.pressure
         bme_temp = bme.temperature
         bmp_temp = bmp.temperature
         print(f"\nBMP585 Pressure = {bmp_hpa:.7f} hPa, {bmp_temp:.7f}°C")
         print(f"BME680 Pressure = {bme_hpa:.7f} hPa, {bme_temp:.7f}°C")
-        print(f"BME680 FP Pressure = {bme_fp_hpa:.7f} hPa, temp Diff = {bme_temp- bmp_temp:.7f}°C diff \n")
-
         print(f"Diff = {bme_hpa - bmp_hpa:.7f} diff in hpa\n")
-        print(f"INT vs. FP implementation Diff = {bme_hpa - bme_fp_hpa:.7f} diff in hpa\n")
 
-
+        if DEBUG:
+            bme_fp_hpa = bme.pressure_fp
+            print(f"\nBME680 FP Pressure = {bme_fp_hpa:.7f} hPa, temp Diff = {bme_temp - bmp_temp:.7f}°C diff")
+            print(f"INT vs. FP implementation Diff = {bme_hpa - bme_fp_hpa:.7f} diff in hpa\n")
 
         print("\n====================Start test Loop")
+
+        last_gas_time = 0.0  # Set to 0 to force a baseline burn immediately on boot
         while True:
-            bme_hpa = bme.pressure
+            current_time = time.monotonic()
+
+            # Get BMP metrics
             bmp_hpa = bmp.pressure
-            bme_temp = bme.temperature
             bmp_temp = bmp.temperature
+
+            # Get BME metrics, Perform gas readings every 60 seconds, since measurement raises temp
+            if (current_time - last_gas_time) >= GAS_INTERVAL_SEC:
+                last_gas_time = current_time
+                print(f"\nBME680 Gas measurement (every {GAS_INTERVAL_SEC:.0f}s)")
+                gas_ohms = bme.gas
+                percent_humidity = bme.humidity
+                iaq = calculate_iaq(gas_ohms, percent_humidity)
+                print(f"IAQ = {iaq:.1f} ({iaq_quality_to_string(iaq)}), {gas_ohms / 1000.0} Kohms")
+            else:
+                percent_humidity = bme.humidity  # Trigger one non-gas measurement, caches other BME metrics
+            bme_hpa = bme.pressure
+            bme_temp = bme.temperature
+
             print(f"\nBMP585 Pressure = {bmp_hpa:.7f} hPa, {bmp_temp:.1f}°C")
-            print(f"BME680 Pressure = {bme_hpa:.7f} hPa, {bme_temp:.1f}°C")
+            print(f"BME680 Pressure = {bme_hpa:.7f} hPa, {bme_temp:.1f}°C [{bme_hpa - bmp_hpa:.4f} hPa diff]")
+            print(f"BME Altitude = {bme.altitude:.3f} meters")
+            print(f"BMP Altitude = {bmp.altitude:.3f} meters")
+            print(f"BME Humidity = {percent_humidity:.1f}%")
 
-            percent_humidity = bme.humidity
-            gas_ohms = bme.gas
-            iaq = calculate_iaq(gas_ohms, percent_humidity)
-            print (f"iaq = {iaq:.1f}, humidity = {percent_humidity:.1f}%")
-
-            time.sleep(0.2)
+            time.sleep(5.0)
 
     except KeyboardInterrupt:
         print("\nExit on User Interrupt...")
