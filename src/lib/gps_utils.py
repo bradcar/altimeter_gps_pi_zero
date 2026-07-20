@@ -1,17 +1,35 @@
+import os
 import time
 
 from adafruit_gps import GPS
 
 
 def get_local_time(gps, time_zone_hours=0):
-    # Convert the struct_time from the GPS to seconds since the epoch
+    """Convert GPS time and adjust by time_zone_hours to create local time."""
+    # Convert GPS struct_time to seconds since the epoch, (time_zone_hours * 60 min * 60 sec)
     utc_seconds = time.mktime(gps.timestamp_utc)
-
-    # local time in seconds (time_zone_hours * 60 minutes * 60 seconds)
     local_seconds = utc_seconds + time_zone_hours * 3600
 
-    # Convert those seconds back for a clean struct_time
+    # Convert those seconds back to struct_time
     return time.localtime(local_seconds)
+
+
+def set_system_time_from_gps(gps):
+    """Sets the Pi ero system clock (in UTC) using GPS UTC timestamp."""
+    if gps.timestamp_utc is None or gps.timestamp_utc.tm_year < 2024:
+        return False
+
+    try:
+        t = gps.timestamp_utc
+        utc_str = f"{t.tm_year:04d}-{t.tm_mon:02d}-{t.tm_mday:02d} {t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}"
+
+        # -u flag says it is UTC time
+        os.system(f'sudo date -u -s "{utc_str}" > /dev/null 2>&1')
+        print(f"--> System clock synced to GPS UTC: {utc_str}")
+        return True
+    except Exception as e:
+        print(f"Failed to set system time: {e}")
+        return False
 
 
 def print_gps_dms(gps):
