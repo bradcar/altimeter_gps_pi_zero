@@ -89,7 +89,7 @@ button_3_pushed = False
 # Initialize the SSD1680 e-ink hardware & Pillow canvas
 print("Initialize Eink...")
 epd_disp, epd_draw, epd_font_small, epd_image = init_eink_display()
-print("Eink Initialized.")
+print("Eink Initialized")
 
 # Load custom font sizes using Pillow
 try:
@@ -331,19 +331,34 @@ def display_altimeter_details(buzz, altitude_m, pressure_hpa, temp_c, humidity, 
 
 
 def display_gps_details(gps):
+    """
+    display GPS details on screen, protect for None values
+
+    """
     if gps is not None:
         epd_draw.rectangle((0, 0, 250, 122), fill=255)
-        epd_draw.text((3, 5), f"GPS ({gps.satellites} sats, qual={gps.fix_quality})", font=font_small, fill=0)
+
+        # #sats & quality values with fallbacks if lost or partial fix
+        sats = gps.satellites if gps.satellites is not None else 0
+        qual = gps.fix_quality if gps.fix_quality is not None else 0
+        epd_draw.text((3, 5), f"GPS ({sats} sats, qual={qual})", font=font_small, fill=0)
+
         clock_string = time.strftime("%I:%M:%S", time.localtime())
         clock_width = font_small.getlength(clock_string)
         epd_draw.text((240 - clock_width, 5), clock_string, font=font_small, fill=0)
         epd_draw.line((5, 21, 240, 21), fill=0, width=1)
+
+        # GPS Metrics
+        accuracy_str = f"+/- {gps.vdop * 4:.1f}m" if gps.vdop is not None else "N/A"
+        alt_str = f"{gps.altitude_m:.1f}m" if gps.altitude_m is not None else "N/A"
+        speed_str = f"{gps.speed_knots * 1.15078:.1f} mph" if gps.speed_knots is not None else "0.0 mph"
+
         sensor_data = [
             ("Lat", get_lat_string(gps)),
             ("Long", get_lon_string(gps)),
-            ("Accuracy", f"+/- {gps.vdop * 4:.1f}m"),
-            ("Altitude", f"{gps.altitude_m}m"),
-            ("Speed", f"{gps.speed_knots * 1.15078:.1f} mph"),
+            ("Accuracy", accuracy_str),
+            ("Altitude", alt_str),
+            ("Speed", speed_str),
         ]
 
         font_list = font_medium
@@ -470,7 +485,7 @@ def main():
     is_metric = False
     warning_toggle = 0
 
-    print("Starting...")
+    print("\nStarting...")
     print("=================================================")
     print(implementation[0], uname()[3], "\nrun on", uname()[4])
     temp = pi_on_chip_temperature()
@@ -490,7 +505,7 @@ def main():
     except Exception as e:
         error_bme680 = True
         bme_exists = False
-        print(f"ERROR: init BME680_I2C(i2c=i2c, address=0x77): {e}")
+        print(f"ERROR: BME680 not initialized: {e}")
 
     try:
         bmp = bmpxxx.BMP585(i2c=i2c1, address=0x47)
@@ -503,15 +518,15 @@ def main():
     except Exception as e:
         bmp_exists = False
         error_bmp585 = True
-        print(f"ERROR: BMP BMP585 not initialized: {e}")
+        print(f"ERROR: BMP585 not initialized: {e}")
 
     try:
         with open("last-sea-level-pressure.txt", "r") as data_file:
             sea_level_pressure = float(data_file.read().strip())
-        print(f"Using previous sea level pressure = {sea_level_pressure}")
+        print(f"\nUsing previous sea level pressure = {sea_level_pressure}")
     except Exception:
         sea_level_pressure = INIT_SEA_LEVEL_PRESSURE
-        print(f"No previous sea level pressure stored in file")
+        print(f"\nNo previous sea level pressure stored in file")
         print(f"Using program sea level pressure in constant ={sea_level_pressure}")
 
     # Calibrate Barometers
@@ -528,7 +543,7 @@ def main():
 
     # Start GPS
     # GPS on Pi Zero uses UART with pyserial library
-    print("Initialized GPS")
+    print("Initialize GPS...")
     uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=10)
     gps = adafruit_gps.GPS(uart, debug=False)
 
@@ -555,7 +570,7 @@ def main():
     prev_press = None
 
     first_run = True
-    set_time_requested = True  # True for first time, then every day, at next fix will set system clock
+    sync_time_requested = True  # True for first time, then every day, at next fix will set system clock
 
 
     current_time = time.monotonic()
@@ -584,7 +599,7 @@ def main():
     prev_press = None
     first_run = True
 
-    print("start of main loop\n")
+    print("\nstart of main loop")
 
     # main loop
     while True:
@@ -660,23 +675,22 @@ def main():
             if gps.has_fix:
                 print_gps_metrics(gps, time_zone_hours)
 
-                # On first fix set the system cloc, then reset each day
-                if set_time_requested:
+                # On first fix, sync system clock with GPS, then reset each day
+                if sync_time_requested:
                     if set_system_time_from_gps(gps):
                         last_clock_set_time = current_time
-                        # only after successful time set, turn off request flag
-                        set_time_requested = False
+                        # only after successful time set, turn off sych request flag
+                        sync_time_requested = False
             else:
                 print("Waiting for fix...")
 
-        # Every day request that systems time be reset based on GPS
+        # Every day request that systems time synchronized with GPS
         if (current_time - last_clock_set_time) >= SET_CLOCK_INTERVAL_SEC:
-            set_time_requested = True
+            sync_time_requested = True
 
         # E-ink Display Refresh (Every 5 seconds)
         if (current_time - last_eink_time) >= EINK_INTERVAL_SEC:
-            # TODO validate if this is what we want
-            # Determine if metrics changed significantly
+            # TODO validate need for values_changed (seems better to let Eink partial updates)
             values_changed = False
             if prev_alt is None or abs(altitude_m - prev_alt) > 0.05 or abs(pressure_hpa - prev_press) > 0.02:
                 values_changed = True
@@ -691,8 +705,8 @@ def main():
 
                 buzzer_sound = None
                 if show_env_details:
-                    display_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric)
-                    # display_gps_details(gps, clock_string)
+                    # display_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric)
+                    display_gps_details(gps)
                 else:
                     display_big_dashboard(buzzer_sound, altitude_m, pressure_hpa, iaq, gps, is_metric)
 
