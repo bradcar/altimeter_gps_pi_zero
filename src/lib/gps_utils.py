@@ -32,14 +32,38 @@ def print_gps_dms(gps):
 
 def get_map_string(gps: GPS) -> str:
     """
+    Create from the GPS coordinates a string format (ex:  "xxx.xxxxxxx N, xxx.xxxxxxx W").
+    This format can be copy-paste into most maps (Apple, Google) to find location on map.
+    :param gps:
+    :return:
+    """
+    lat_string = ""
+    lon_string = ""
+    if gps is None or gps.latitude is None or gps.longitude is None:
+        return "GPS location: N/A"
+    lat_dir = "N" if gps.latitude_degrees >= 0 else "S"
+    lat_string = f"{abs(gps.latitude):.6f} {lat_dir}"
+    lon_dir = "E" if gps.longitude_degrees >= 0 else "W"
+    lon_string = f"{abs(gps.longitude):.6f} {lon_dir}"
+    return f"{lat_string}, {lon_string}"
+
+def get_lat_string(gps: GPS) -> str:
+    """
+    Create Latitude string from the GPS coordinates a sting format (ex:  "xxx.xxxxxxx N").
+    """
+    if gps is None or gps.latitude is None:
+        return "Lat: N/A"
+    direction = "N" if gps.latitude >= 0 else "S"
+    return f"{abs(gps.latitude):.4f}° {direction}"
+
+def get_lon_string(gps: GPS) -> str:
+    """
     Create from the GPS coordinates a sting format (ex:  "xxx.xxxxxxx N, xxx.xxxxxxx W").
     This format can be copy-paste into most maps (Apple, Google) to find location on map.
     :param gps:
     :return:
     """
-    if gps.latitude_degrees is not None:
-        lat_dir = "N" if gps.latitude_degrees >= 0 else "S"
-    if gps.longitude_degrees is not None:
-        lon_dir = "E" if gps.longitude_degrees >= 0 else "W"
-    map_string = f"{gps.latitude:.6f} {lat_dir}, {gps.longitude:.6f} {lon_dir}"
-    return map_string
+    if gps is None or gps.longitude is None:
+        return "Lon: N/A"
+    direction = "E" if gps.longitude >= 0 else "W"
+    return f"{abs(gps.longitude):.4f}° {direction}"
