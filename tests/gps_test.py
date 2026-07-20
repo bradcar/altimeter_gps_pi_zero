@@ -40,16 +40,15 @@ def main():
     gps.send_command(b"PMTK314,0,1,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0")
     gps.send_command(b"PMTK220,1000")
 
-    last_print = time.monotonic()
+    last_gps_time= time.monotonic()
     while True:
         has_new_gps = gps.update()
 
         # Every second print out current location details if there's a fix.
         current = time.monotonic()
-        if current - last_print >= 1.0:
-            last_print = current
+        if current - last_gps_time >= 1.0:
+            last_gps_time = current
             if not gps.has_fix:
-                # Try again if we don't have a fix yet.
                 print("Waiting for fix...")
                 continue
 
