@@ -564,7 +564,11 @@ def main():
 
     # main loop variables
 
-    show_env_details = False
+    # show_env_details = False
+
+    # Display modes: 0 = Big Dashboard, 1 = Altimeter Details, 2 = GPS Details
+    display_mode = 0
+
     buzzer_sound = True
 
 
@@ -623,7 +627,8 @@ def main():
             )
 
         if button3():
-            show_env_details = not show_env_details
+            # show_env_details = not show_env_details
+            display_mode = (display_mode + 1) % 3
 
         # Temperature and standard ambient metrics (Every 2 seconds)
         if (current_time - last_sensor_time) >= SENSOR_INTERVAL_SEC or first_run:
@@ -656,7 +661,7 @@ def main():
                 bme_meters = calc_altitude(bme_hpa, sea_level_pressure)
                 print(f"BME680: {bme_hpa}, {bme_temp}, {bme_meters}")
 
-                # set all values for BME680
+                # Set all metrics with BME680
                 pressure_hpa = bme_hpa
                 temp_c = bme_temp
                 altitude_m = bme_meters
@@ -670,7 +675,6 @@ def main():
                 bmp_hpa = bmp.pressure
                 bmp_temp = bmp.temperature
                 bmp_meters = calc_altitude(bmp_hpa, sea_level_pressure)
-                print(f"BMP585: {bmp_hpa}, {bmp_temp}, {bmp_meters}")
 
                 # Over-write BME680 values with more accurate BMP585 values
                 pressure_hpa = bmp_hpa
@@ -690,8 +694,6 @@ def main():
             last_gps_time = current_time
             if gps.has_fix:
                 print_gps_metrics(gps, time_zone_hours)
-
-                # On first fix, sync system clock with GPS, then reset each day
                 if sync_time_requested:
                     if set_system_time_from_gps(gps):
                         last_clock_set_time = current_time
@@ -720,11 +722,12 @@ def main():
                 prev_press = pressure_hpa
 
                 buzzer_sound = None
-                if show_env_details:
-                    display_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric)
-                    # display_gps_details(gps)
-                else:
+                if display_mode == 0:
                     display_big_dashboard(buzzer_sound, altitude_m, pressure_hpa, iaq, gps, is_metric)
+                elif display_mode == 1:
+                    display_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric)
+                elif display_mode == 2:
+                    display_gps_details(gps)
 
         # Loop cadence control
         # Optional stretch sleep to keep CPU utilization reasonable
