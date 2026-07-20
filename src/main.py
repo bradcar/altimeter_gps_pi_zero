@@ -530,16 +530,19 @@ def main():
         print(f"Using program sea level pressure in constant ={sea_level_pressure}")
 
     # Calibrate Barometers
-    average_diff = 1.0312750  # fallback hPa correction for BME680
-    if bmp_exists and bmp_exists:
+    average_diff = 1.0312750  # fallback hPa correction for BME680, if no BMP585
+    if bmp_exists and bme_exists:
         average_diff = bme_hpa_correction(bme, bmp, 25)
-    if bme_exists:
+        print(f"BMP585 calibrating BME680 hpa_calibration = {average_diff:.7f} hPa")
+    elif bme_exists:
+        print(f"No BMP585 to calibrate BME680, using default {average_diff:.7f} hPa")
         # the amount over will be subtracted in calibration code.
-        bme.hpa_calibration = average_diff
-        if bme.hpa_calibration is not None:
-            print(f"BME680 hpa_calibration = {bme.hpa_calibration:.7f} hPa")
-        else:
-            print(f"ERROR IN BME680 hpa_calibration = None!")
+
+    bme.hpa_calibration = average_diff
+    if bme.hpa_calibration is not None:
+        print(f"BME680 calibrated")
+    else:
+        print(f"ERROR IN BME680 hpa_calibration = None!")
 
     # Start GPS
     # GPS on Pi Zero uses UART with pyserial library
@@ -651,16 +654,29 @@ def main():
                 bme_hpa = bme.pressure
                 bme_temp = bme.temperature
                 bme_meters = calc_altitude(bme_hpa, sea_level_pressure)
+                print(f"BME680: {bme_hpa}, {bme_temp}, {bme_meters}")
 
-                # if BMP present use it as gold standard for pressure, temp, and altitude
-                temp_c = bme_temp
-                humidity = bme_percent_humidity
-                altitude_m = bme_meters
+                # set all values for BME680
                 pressure_hpa = bme_hpa
+                temp_c = bme_temp
+                altitude_m = bme_meters
+                humidity = bme_percent_humidity
+
                 iaq = bme_iaq
 
-            # if error_bmp585:
-            #     print(f"No high-precision Altitude bmp585 sensor\n")
+            if error_bmp585:
+                print(f"No high-precision Altitude bmp585 sensor\n")
+            else:
+                bmp_hpa = bmp.pressure
+                bmp_temp = bmp.temperature
+                bmp_meters = calc_altitude(bmp_hpa, sea_level_pressure)
+                print(f"BMP585: {bmp_hpa}, {bmp_temp}, {bmp_meters}")
+
+                # Over-write BME680 values with more accurate BMP585 values
+                pressure_hpa = bmp_hpa
+                temp_c = bmp_temp
+                altitude_m = bmp_meters
+                print(f"system: {pressure_hpa}, {temp_c}, {altitude_m}\n")
 
             if error_bme680 and error_bmp585:
                 print("Critical Error: No altitude sensors available.")
@@ -705,8 +721,8 @@ def main():
 
                 buzzer_sound = None
                 if show_env_details:
-                    # display_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric)
-                    display_gps_details(gps)
+                    display_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric)
+                    # display_gps_details(gps)
                 else:
                     display_big_dashboard(buzzer_sound, altitude_m, pressure_hpa, iaq, gps, is_metric)
 
