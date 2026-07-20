@@ -10,7 +10,7 @@ def get_local_time(gps, time_zone_hours=0):
     # local time in seconds (time_zone_hours * 60 minutes * 60 seconds)
     local_seconds = utc_seconds + time_zone_hours * 3600
 
-    # Convert those seconds back for a clean truct_time
+    # Convert those seconds back for a clean struct_time
     return time.localtime(local_seconds)
 
 
@@ -35,7 +35,7 @@ def get_map_string(gps: GPS) -> str:
     Create from the GPS coordinates a string format (ex:  "xxx.xxxxxxx N, xxx.xxxxxxx W").
     This format can be copy-paste into most maps (Apple, Google) to find location on map.
     :param gps:
-    :return:
+    :return: string: "xxx.xxxxxxx N, xxx.xxxxxxx W"
     """
     lat_string = ""
     lon_string = ""
@@ -58,10 +58,7 @@ def get_lat_string(gps: GPS) -> str:
 
 def get_lon_string(gps: GPS) -> str:
     """
-    Create from the GPS coordinates a sting format (ex:  "xxx.xxxxxxx N, xxx.xxxxxxx W").
-    This format can be copy-paste into most maps (Apple, Google) to find location on map.
-    :param gps:
-    :return:
+    Create Longitude string from the GPS coordinates a sting format (ex:  "xxx.xxxxxxx W").
     """
     if gps is None or gps.longitude is None:
         return "Lon: N/A"
