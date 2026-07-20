@@ -503,7 +503,7 @@ def main():
     except Exception as e:
         bmp_exists = False
         error_bmp585 = True
-        print(f"ERROR: init bmp58x.BMP585(i2c=i2c, address=0x47): {e}")
+        print(f"ERROR: BMP BMP585 not initialized: {e}")
 
     try:
         with open("last-sea-level-pressure.txt", "r") as data_file:
@@ -528,7 +528,7 @@ def main():
 
     # Start GPS
     # GPS on Pi Zero uses UART with pyserial library
-    print("Initialized GPS.")
+    print("Initialized GPS")
     uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=10)
     gps = adafruit_gps.GPS(uart, debug=False)
 
@@ -536,7 +536,7 @@ def main():
     gps.send_command(b"PMTK314,0,1,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0")
     gps.send_command(b"PMTK220,1000")
     clock_string = None
-    print("GPS Initialized.")
+    print("GPS Initialized")
 
     # if buzzer_sound: buzzer.on()
     # zzz(.2)
@@ -549,19 +549,21 @@ def main():
     show_env_details = False
     buzzer_sound = True
 
-    set_time_requested = True  # True for first time, then every day, at next fix will set system clock
 
     # Store previous values to detect actual changes
     prev_alt = None
     prev_press = None
 
     first_run = True
-    # Initialize timing trackers using time.monotonic()
+    set_time_requested = True  # True for first time, then every day, at next fix will set system clock
+
+
     current_time = time.monotonic()
     last_sensor_time = 0.0  # Force instant execution on the first loop
     last_gas_time = current_time
     last_eink_time = current_time
     last_gps_time = current_time
+    last_clock_set_time = current_time
 
     # Initialize metrics
     altitude_m = 0.0
@@ -661,21 +663,20 @@ def main():
                 # On first fix set the system cloc, then reset each day
                 if set_time_requested:
                     if set_system_time_from_gps(gps):
-                        last_time_sync = current_time
-                        print("******* ----------- SET TIME ----------- ********")
-                        # only after sucessful time set, turn off request flag
+                        last_clock_set_time = current_time
+                        # only after successful time set, turn off request flag
                         set_time_requested = False
             else:
                 print("Waiting for fix...")
 
-        # Every day request that sytems time be reset based on GPS
-        if (current_time - last_eink_time) >= SET_CLOCK_INTERVAL_SEC:
+        # Every day request that systems time be reset based on GPS
+        if (current_time - last_clock_set_time) >= SET_CLOCK_INTERVAL_SEC:
             set_time_requested = True
 
         # E-ink Display Refresh (Every 5 seconds)
         if (current_time - last_eink_time) >= EINK_INTERVAL_SEC:
             # TODO validate if this is what we want
-            # Determine if values changed significantly
+            # Determine if metrics changed significantly
             values_changed = False
             if prev_alt is None or abs(altitude_m - prev_alt) > 0.05 or abs(pressure_hpa - prev_press) > 0.02:
                 values_changed = True
