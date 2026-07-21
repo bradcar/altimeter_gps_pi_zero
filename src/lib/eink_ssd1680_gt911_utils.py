@@ -1,51 +1,47 @@
-# eink_ssd1680_gt911.py
 """
 General Utils for Waveshare 2.13" E-Paper Touch Hat (epd2in13_V4)
-
-Waveshare E-ink touch Hat 2.13" SSD1680 + GT911 (touch)
-        20716: 2.13" Touch e-Paper HAT (with Pi Zero Case)
-        Has partial updates
-        https://www.waveshare.com/wiki/2.13inch_Touch_e-Paper_HAT_Manual
-
-
+Includes GT911 Touch Controller Driver & Canvas Helpers.
 """
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
-# Add project root and vendors directory to Python search path
+import smbus2
+from PIL import Image, ImageDraw
+
+# Add project root and vendor directory to Python search path
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parent
 VENDORS_DIR = PROJECT_ROOT / "vendor"
 
-# Append vendors directory so 'import epd2in13_V4' works directly
 if str(VENDORS_DIR) not in sys.path:
     sys.path.insert(0, str(VENDORS_DIR))
-
-# Append project root so module imports across src work smoothly
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Direct import from vendors/epd2in13_V4.py
+from vendor.epd2in13_V4 import epdconfig
 import epd2in13_V4
 
-from PIL import Image, ImageDraw, ImageFont
-import smbus2
-import time
-from dataclasses import dataclass
+# Touch Hardware Pin Definitions
+RST_PIN = 22
+INT_PIN = 27
 
-# GT911 I2C Address & Register Definitions
-GT911_I2C_ADDR = 0x14  # Default I2C address for Waveshare 2.13" Touch HAT (can be 0x5D on some boards)
-GT911_READ_COORD_ADDR = 0x814E  # Point status register
+# GT911 I2C Addresses
+GT911_ADDR_PRIMARY = 0x14
+GT911_ADDR_SECONDARY = 0x5D
+
+# GT911 Registers
+GT911_READ_COORD_ADDR = 0x814E
+GT911_PRODUCT_ID_ADDR = 0x8140
 
 TOUCH_WIDTH = 250
 TOUCH_HEIGHT = 122
-E_INK_WIDTH = 122
-E_INK_HEIGHT = 250
 VIRTUAL_WIDTH = 250
 VIRTUAL_HEIGHT = 122
 FILL_WHITE = 255
 
-
+DEBUG_TOUCH = True  # Set to True to print touch events to stdout
 
 
 @dataclass
@@ -56,63 +52,91 @@ class TouchPoint:
     size: int = 0
 
 
+def reset_gt911():
+    """
+    Forces hardware reset pulse on GT911 to set I2C address 0x14.
+    Reuses Waveshare's epdconfig digital_write interface.
+    """
+    try:
+        # Pulse RST (GPIO 22) low using epdconfig's active backend
+        epdconfig.digital_write(RST_PIN, 0)
+        time.sleep(0.02)
+
+        # Drive RST (GPIO 22) high -> configures GT911 address to 0x14
+        epdconfig.digital_write(RST_PIN, 1)
+        time.sleep(0.05)
+
+        print(" * GT911 Eink Touch reset at 0x14 (via epdconfig)")
+
+    except Exception as e:
+        print(f"* GT911 Eink touch reset error: {e}")
+
+
 class GT911Touch:
-    def __init__(self, bus_num=1, address=GT911_I2C_ADDR):
+    def __init__(self, bus_num=1, reset_pin=22, int_pin=27):
         self.bus_num = bus_num
-        self.address = address
+        self.reset_pin = reset_pin
+        self.int_pin = int_pin
+        self.address = GT911_ADDR_PRIMARY
         self.bus = None
+
+        # State tracking for debounce & edge detection
+        self.finger_down = False
+        self.last_trigger_time = 0.0
+
         self._init_i2c()
 
     def _init_i2c(self):
         try:
             self.bus = smbus2.SMBus(self.bus_num)
+            for addr in [GT911_ADDR_PRIMARY, GT911_ADDR_SECONDARY]:
+                try:
+                    msb, lsb = (GT911_PRODUCT_ID_ADDR >> 8) & 0xFF, GT911_PRODUCT_ID_ADDR & 0xFF
+                    self.bus.i2c_rdwr(
+                        smbus2.i2c_msg.write(addr, [msb, lsb]),
+                        smbus2.i2c_msg.read(addr, 4)
+                    )
+                    self.address = addr
+                    print(f" * GT911: Eink Touch detected at I2C address 0x{addr:02X}")
+                    return
+                except Exception:
+                    continue
+            print("GT911 WARNING: No Eink Touch responded at 0x14 or 0x5D!")
         except Exception as e:
             print(f"GT911: Failed to open I2C bus {self.bus_num}: {e}")
             self.bus = None
 
     def read_touch_points(self) -> list[TouchPoint]:
-        """
-        Reads touch data from GT911 registers.
-        Returns a list of TouchPoint objects with coordinates matching
-        the rotated 250x122 display layout.
-        """
+        """Low-level register poll for raw touch points."""
         if self.bus is None:
             return []
 
         try:
-            # Read 1 byte from point status register (0x814E)
             reg_msb = (GT911_READ_COORD_ADDR >> 8) & 0xFF
             reg_lsb = GT911_READ_COORD_ADDR & 0xFF
 
-            # Write register address to set read pointer
             write_msg = smbus2.i2c_msg.write(self.address, [reg_msb, reg_lsb])
             read_msg = smbus2.i2c_msg.read(self.address, 1)
             self.bus.i2c_rdwr(write_msg, read_msg)
 
             point_status = list(read_msg)[0]
-
-            # Buffer status bit (Bit 7): 1 = data ready
             buffer_ready = (point_status & 0x80) != 0
             touch_count = point_status & 0x0F
 
-            if not buffer_ready or touch_count == 0:
-                # Clear buffer status flag if set with 0 touch count
-                if buffer_ready:
-                    self._clear_status_register()
+            if not buffer_ready:
                 return []
 
-            # Read 8 bytes per touch point starting at 0x814F
-            points = []
+            if touch_count == 0:
+                self._clear_status_register()
+                return []
+
             bytes_to_read = touch_count * 8
-
-            coord_addr_msb = 0x81
-            coord_addr_lsb = 0x4F
-
-            write_coord = smbus2.i2c_msg.write(self.address, [coord_addr_msb, coord_addr_lsb])
+            write_coord = smbus2.i2c_msg.write(self.address, [0x81, 0x4F])
             read_coords = smbus2.i2c_msg.read(self.address, bytes_to_read)
             self.bus.i2c_rdwr(write_coord, read_coords)
 
             data = list(read_coords)
+            points = []
 
             for i in range(touch_count):
                 offset = i * 8
@@ -121,27 +145,55 @@ class GT911Touch:
                 raw_y = data[offset + 3] | (data[offset + 4] << 8)
                 p_size = data[offset + 5] | (data[offset + 6] << 8)
 
-                # Rotate 180 degrees to match your display orientation:
-                # get_rotated_buffer(img) flips display by 180 degrees
+                # Rotate 180 degrees
                 rotated_x = TOUCH_WIDTH - 1 - raw_x
                 rotated_y = TOUCH_HEIGHT - 1 - raw_y
 
-                # Clamp values to screen bounds
                 final_x = max(0, min(TOUCH_WIDTH - 1, rotated_x))
                 final_y = max(0, min(TOUCH_HEIGHT - 1, rotated_y))
 
-                points.append(TouchPoint(x=final_x, y=final_y, id=p_id, size=p_size))
+                pt = TouchPoint(x=final_x, y=final_y, id=p_id, size=p_size)
+                points.append(pt)
 
-            # Clear status register (write 0 to 0x814E) so GT911 knows we read the buffer
             self._clear_status_register()
             return points
 
-        except Exception as e:
-            # Silence transient I2C read errors during rapid polling
+        except Exception:
             return []
 
+    def get_single_press(self, cooldown_sec: float = 0.8) -> list[TouchPoint]:
+        """
+        Returns touch points ONLY on the initial touch event (finger-down transition).
+        Ignores continuous holding and enforces a cooldown period.
+        """
+        raw_points = self.read_touch_points()
+        now = time.time()
+
+        if raw_points:
+            # Finger is currently on the screen
+            if not self.finger_down:
+                self.finger_down = True
+                # Only register button press if cooldown period has elapsed
+                if (now - self.last_trigger_time) >= cooldown_sec:
+                    self.last_trigger_time = now
+                    if DEBUG_TOUCH:
+                        pt = raw_points[0]
+                        print(f"[GT911 TOUCH] Press detected at ({pt.x}, {pt.y})")
+                    return raw_points
+            # Finger is still held down -> ignore repeating events
+            return []
+        else:
+            # Finger lifted -> reset state
+            self.finger_down = False
+            return []
+
+    def flush_buffer(self):
+        """Flushes any accumulated/stale touches in the GT911 hardware register."""
+        self._clear_status_register()
+        self.finger_down = False
+
     def _clear_status_register(self):
-        """Clears the buffer status register by writing 0 to 0x814E."""
+        """Clears 0x814E by writing 0x00."""
         try:
             reg_msb = (GT911_READ_COORD_ADDR >> 8) & 0xFF
             reg_lsb = GT911_READ_COORD_ADDR & 0xFF
@@ -150,35 +202,35 @@ class GT911Touch:
         except Exception:
             pass
 
+
+# E-Ink Display Globals
 epd_disp = None
 epd_image = None
 epd_draw = None
 partial_refresh_count = 0
 MAX_PARTIAL_REFRESHES = 15
 
-epd = None
-
-# Global singleton instance for utility function
 _gt911_driver = None
-
-# Internal refresh counter to enforce ghosting safeguards
-_PARTIAL_COUNT = 0
-MAX_PARTIAL_REFRESHES = 15
 
 
 def init_eink_display():
-    global epd_disp, epd_image, epd_draw
+    global epd_disp, epd_image, epd_draw, _gt911_driver
 
-    # Initialize Waveshare display driver from vendors/epd2in13_V4.py
+    # Initialize E-Paper Display hardware first
     epd_disp = epd2in13_V4.EPD()
     epd_disp.init(epd_disp.FULL_UPDATE)
     epd_disp.Clear(0xFF)
 
-    # 250x122 Canvas (1 = White, 0 = Black)
-    epd_image = Image.new('1', (250, 122), 255)
+    # Reset and wake up GT911 Touch Chip
+    reset_gt911()
+
+    # Instantiate GT911 Driver
+    _gt911_driver = GT911Touch(bus_num=1)
+
+    # Canvas setup
+    epd_image = Image.new('1', (VIRTUAL_WIDTH, VIRTUAL_HEIGHT), FILL_WHITE)
     epd_draw = ImageDraw.Draw(epd_image)
 
-    # Store initial frame for partial refresh baseline
     epd_disp.displayPartBaseImage(get_rotated_buffer(epd_image))
     epd_disp.init(epd_disp.PART_UPDATE)
 
@@ -186,20 +238,14 @@ def init_eink_display():
 
 
 def blank_canvas_eink(draw):
-    """Fills the virtual landscape canvas with white."""
     draw.rectangle((0, 0, VIRTUAL_WIDTH, VIRTUAL_HEIGHT), fill=FILL_WHITE)
 
 
 def get_rotated_buffer(img):
-    """180-degree flip to account for mounting orientation."""
     return epd_disp.getbuffer(img.rotate(180))
 
 
 def refresh_eink_display(disp, draw, img, partial=True):
-    """
-    Handles partial updates and automatically executes a clean full update
-    every 15 refreshes to clear ghosting.
-    """
     global partial_refresh_count
     if not partial or partial_refresh_count >= MAX_PARTIAL_REFRESHES:
         epd_disp.init(epd_disp.FULL_UPDATE)
@@ -210,24 +256,27 @@ def refresh_eink_display(disp, draw, img, partial=True):
         epd_disp.displayPartial(get_rotated_buffer(epd_image))
         partial_refresh_count += 1
 
-def check_touch_inputs() -> list[TouchPoint]:
-    """
-    Utility wrapper function called from altimeter_gps.py.
-    Initializes driver on first run and returns active touch points.
-    """
+
+def check_touch_inputs(cooldown_sec: float = 0.8) -> list[TouchPoint]:
+    """Utility wrapper polled continuously from main loop."""
     global _gt911_driver
     if _gt911_driver is None:
-        _gt911_driver = GT911Touch(bus_num=1, address=GT911_I2C_ADDR)
+        reset_gt911()
+        _gt911_driver = GT911Touch()
 
-    return _gt911_driver.read_touch_points()
+    return _gt911_driver.get_single_press(cooldown_sec=cooldown_sec)
+
+
+def flush_touch_inputs():
+    """Flushes stale touch points from the GT911 buffer."""
+    global _gt911_driver
+    if _gt911_driver is not None:
+        _gt911_driver.flush_buffer()
 
 
 def cleanup_eink(display=None):
-    """
-    Optional helper: Clears the display and ensures deep sleep on program shutdown.
-    """
-    global epd
-    target_epd = display if display is not None else epd
+    global epd_disp
+    target_epd = display if display is not None else epd_disp
     if target_epd:
         target_epd.init()
         target_epd.Clear(0xFF)
