@@ -6,7 +6,9 @@ Sensors used
     - BMP585 highly accurate pressure & altitude
     - BME680 temp, humidity, pressure, IAQ, altitude
     - Rotary encoder to adjust alt and or pressure, switch toggle for larger increments
-    - Eink display 240px x 122px
+    - Eink display 250px x 122px
+        - Waveshare 20716: 2.13" Touch e-Paper HAT (with Pi Zero Case)
+        - Adafruit E-ink 2.13" SSD1680
     - Touch display 5 points
     - Metric/Imperial switch
 
