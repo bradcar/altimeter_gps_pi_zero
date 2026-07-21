@@ -4,8 +4,18 @@ matplotlib
 numpy
 Pillow
 python-periphery
+
+# GPS
 adafruit-circuitpython-gps
 pyserial
+
+# Adafruite Eink Display
 gpiozero
 rpi-lgpio
 adafruit-circuitpython-epd
+
+# Waveshare Eink Display
+spidev
+RPi.GPIO
+smbus2
+smbus
