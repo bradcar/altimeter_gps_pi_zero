@@ -1,6 +1,6 @@
 # eink_SSD1680_utils.py
 """
-General Utils for E-ink SSD1680
+General Utils for Adafruit E-ink SSD1680
 """
 from PIL import Image, ImageDraw, ImageFont
 import board
