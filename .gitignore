@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Wavesshare Demos
+tests/waveshare-eink/
+
 # PyCharm project-level files and directories
 .idea/
 *.iml
