@@ -52,36 +52,33 @@ def draw_test_grid(epd_draw, font_small, font_medium, last_touch_info="Touch any
 
 def process_touch_data():
     """
-    Corrected GT911 mapping for 250x122 display:
-    Display X comes from Raw Y (scaled to 0..250)
-    Display Y comes from Raw X (scaled from 0..250 down to 0..122)
+    GT911 mapping using measured hardware bounds:
+    Raw Y (~0..85) -> Display X (0..250)
+    Raw X (~120..220) -> Display Y (0..122)
     """
     touch_data = check_touch_inputs()
     if not touch_data:
         return None
 
-    # Process first touch point
     touch = touch_data[0]
     raw_x, raw_y = touch.x, touch.y
 
-    # --- AXIS MAPPING & SCALING ---
-    # Display X (0..250): Driven by raw_y. Inverted so high raw_y is Left, low is Right.
-    # Raw Y typically tops out around ~85-100 on this panel, so scale accordingly:
-    x = int((raw_y / 85.0) * (SCREEN_WIDTH - 1))
+    # --- YOUR CALIBRATED SCALING ---
+    # Invert raw_y so Left touch -> X near 0, Right touch -> X near 249
+    x = int(((85.0 - raw_y) / 85.0) * (SCREEN_WIDTH - 1))
 
-    # Display Y (0..122): Driven by raw_x (0..250 mapped to 0..122 height)
-    # Raw X ~120 is Top, ~220 is Bottom
+    # Scale raw_x (120..220) cleanly to Display Y (0..122)
     y = int(((raw_x - 120) / 100.0) * (SCREEN_HEIGHT - 1))
 
-    # Clamp boundaries strictly to screen dimensions
+    # Clamp boundaries
     x = max(0, min(SCREEN_WIDTH - 1, x))
     y = max(0, min(SCREEN_HEIGHT - 1, y))
 
-    # Evaluate Quadrant Zone
+    # Clean, standard quadrant evaluation matching the screen display
     if x <= 125:
-        zone = "Upper Right (Btn 1)" if y <= 61 else "Lower Right (Reserved)"
-    else:
         zone = "Upper Left (Btn 3)" if y <= 61 else "Lower Left (Btn 2)"
+    else:
+        zone = "Upper Right (Btn 1)" if y <= 61 else "Lower Right (Reserved)"
 
     return x, y, raw_x, raw_y, zone
 
