@@ -77,8 +77,9 @@ button_1 = Button(16, pull_up=True, bounce_time=0.05)
 button_2 = Button(5, pull_up=True, bounce_time=0.05)
 button_3 = Button(6, pull_up=True, bounce_time=0.05)
 
-encoder = RotaryEncoder(a=13, b=19, bounce_time=0.005)
-rotary_switch = Button(26, pull_up=True, bounce_time=0.05)
+# a = clk, b = DT
+encoder = RotaryEncoder(a=21, b=13, bounce_time=0.005)
+rotary_switch = Button(19, pull_up=True, bounce_time=0.05)
 
 button_1_pushed = False
 button_2_pushed = False
@@ -124,21 +125,22 @@ debounce_3_time = 0
 
 def button_1_handler():
     global button_1_pushed, debounce_1_time
-    if (ticks_ms() - debounce_1_time) > 500:
+    if (ticks_ms() - debounce_1_time) > 250:
         button_1_pushed = True
+        debounce_1_time = ticks_ms()
         debounce_1_time = ticks_ms()
 
 
 def button_2_handler():
     global button_2_pushed, debounce_2_time
-    if (ticks_ms() - debounce_2_time) > 500:
+    if (ticks_ms() - debounce_2_time) > 250:
         button_2_pushed = True
         debounce_2_time = ticks_ms()
 
 
 def button_3_handler():
     global button_3_pushed, debounce_3_time
-    if (ticks_ms() - debounce_3_time) > 500:
+    if (ticks_ms() - debounce_3_time) > 250:
         button_3_pushed = True
         debounce_3_time = ticks_ms()
 
@@ -152,6 +154,7 @@ def button1():
     global button_1_pushed
     if button_1_pushed:
         button_1_pushed = False
+        print("* Button 1 Pushed")
         return True
     else:
         return False
@@ -161,6 +164,7 @@ def button2():
     global button_2_pushed
     if button_2_pushed:
         button_2_pushed = False
+        print("* Button 2 Pushed")
         return True
     else:
         return False
@@ -170,6 +174,7 @@ def button3():
     global button_3_pushed
     if button_3_pushed:
         button_3_pushed = False
+        print("* Button 3 Pushed")
         return True
     else:
         return False
@@ -219,75 +224,96 @@ def altitude_reference_splash(is_metric):
 
 
 # Definition with parameters instead of global dependencies:
-def adjust_altitude_slp(buzz, bmp_update, is_metric, altitude_m, pressure_hpa, sea_level_pressure_hpa):
+def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pressure_hpa):
     """
-    Adjust the altitude in the desired metric, use it to return a new Sea Level Pressure (SLP)
+    Adjust the altitude using the rotary encoder and update Sea Level Pressure (SLP).
     """
     new_alt = altitude_m
     new_slp = sea_level_pressure_hpa
-
-    print(f"Adjustment start: alt= {new_alt} m, {new_alt * 3.28084} ft")
-    show_updated_altitude_display(new_alt, new_slp, is_metric)
-
     rotary_multiplier = 1
     rotary_old = encoder.steps
+
+    print(f"Adjustment start: alt = {new_alt:.1f} m")
+
+    # Initial draw
+    need_redraw = True
+
     while not button2():
+        # Keep GPS UART buffer clear in background
+        if gps is not None:
+            gps.update()
+
+        # Handle unit toggle
         if button1():
             is_metric = not is_metric
+            need_redraw = True
 
-        new_alt_feet = new_alt * 3.28084
-        rotary_new = encoder.steps
-
+        # Handle multiplier toggle switch (press once to toggle x1 / x100)
         if rotary_switch.is_pressed:
             rotary_multiplier = 100 if rotary_multiplier == 1 else 1
+            print(f"Rotary multiplier: {rotary_multiplier}")
             while rotary_switch.is_pressed:
                 zzz(0.01)
 
+        # Handle encoder movement
+        rotary_new = encoder.steps
         if rotary_old != rotary_new:
             delta = rotary_new - rotary_old
-            new_alt_feet = new_alt_feet + delta * rotary_multiplier
+
+            # Step in Meters (1m / 100m) or Feet (1ft / 100ft) based on active unit
+            if is_metric:
+                new_alt += delta * rotary_multiplier
+            else:
+                new_alt += (delta * rotary_multiplier) / 3.28084
+
+            new_slp = calc_sea_level_pressure(pressure_hpa, new_alt)
             rotary_old = rotary_new
+            need_redraw = True
 
-        new_alt = new_alt_feet / 3.28084
-        new_slp = calc_sea_level_pressure(pressure_hpa, new_alt)
-        show_updated_altitude_display(new_alt, new_slp, is_metric)
+        # Only refresh E-Ink when an actual state change occurred
+        if need_redraw:
+            show_updated_altitude_display(new_alt, new_slp, is_metric)
+            need_redraw = False
 
-    with open("last-sea-level-pressure.txt", "w") as data_file:
-        data_file.write(f"{new_slp}")
+        zzz(0.05)  # Yield CPU to keep utilization low
+
+    # Save newly calculated SLP to disk on exit
+    try:
+        with open("last-sea-level-pressure.txt", "w") as data_file:
+            data_file.write(f"{new_slp:.2f}")
+    except Exception as e:
+        print(f"Failed to save SLP to file: {e}")
 
     return new_slp
 
 
 def show_updated_altitude_display(alt, press, is_metric):
     """
-    Update settings
+    Renders current calibration values to E-Ink display.
     """
     epd_draw.rectangle((0, 0, 250, 122), fill=0)
 
     convert, unit = metric_format(is_metric)
 
-    epd_draw.text((10, 8), "Setting Altitude...", font=font_small, fill=255)
-    epd_draw.line((10, 26, 240, 26), fill=255, width=1)
+    epd_draw.text((10, 5), "Setting Altitude...", font=font_small, fill=255)
+    epd_draw.line((10, 23, 240, 23), fill=255, width=1)
 
     # New Altitude Data
-    # Small stacked labels on the left side
-    epd_draw.text((23, 38), "New", font=font_small, fill=255)
-    epd_draw.text((23, 52), "Alt", font=font_small, fill=255)
-    # Big target value on the right side
-    alt_val = f"{(alt * convert):.3f}{unit}"
-    epd_draw.text((68, 38), alt_val, font=font_big, fill=255)
+    epd_draw.text((10, 32), "New", font=font_small, fill=255)
+    epd_draw.text((10, 46), "Alt", font=font_small, fill=255)
+
+    # Formatted to 0 decimals so text fits comfortably on screen
+    alt_val = f"{(alt * convert):.0f}{unit}"
+    epd_draw.text((60, 28), alt_val, font=font_big, fill=255)
 
     # Sea Level Pressure Data
-    # Small stacked labels on the left side
-    epd_draw.text((23, 78), "Sea", font=font_small, fill=255)
-    epd_draw.text((23, 92), "hPA", font=font_small, fill=255)
-    # Big target value on the right side
-    press_val = f"{press:.4f}"
-    epd_draw.text((68, 78), press_val, font=font_big, fill=255)
+    epd_draw.text((10, 78), "Sea", font=font_small, fill=255)
+    epd_draw.text((10, 92), "hPa", font=font_small, fill=255)
 
-    # Push visual updates (use partial refresh for fast response during rotation)
+    press_val = f"{press:.1f}"
+    epd_draw.text((60, 74), press_val, font=font_big, fill=255)
+
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=True)
-    return
 
 
 def display_altimeter_details(buzz, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric):
@@ -523,24 +549,24 @@ def main():
     try:
         with open("last-sea-level-pressure.txt", "r") as data_file:
             sea_level_pressure = float(data_file.read().strip())
-        print(f"\nUsing previous sea level pressure = {sea_level_pressure}")
+        print(f"Using previous sea level pressure = {sea_level_pressure}")
     except Exception:
         sea_level_pressure = INIT_SEA_LEVEL_PRESSURE
-        print(f"\nNo previous sea level pressure stored in file")
+        print(f"No previous sea level pressure stored in file")
         print(f"Using program sea level pressure in constant ={sea_level_pressure}")
 
     # Calibrate Barometers
     average_diff = 1.0312750  # fallback hPa correction for BME680, if no BMP585
     if bmp_exists and bme_exists:
         average_diff = bme_hpa_correction(bme, bmp, 25)
-        print(f"BMP585 calibrating BME680 hpa_calibration = {average_diff:.7f} hPa")
+        print(f"BMP585 calibration for BME680 = {average_diff:.7f} hPa")
     elif bme_exists:
         print(f"No BMP585 to calibrate BME680, using default {average_diff:.7f} hPa")
         # the amount over will be subtracted in calibration code.
 
     bme.hpa_calibration = average_diff
     if bme.hpa_calibration is not None:
-        print(f"BME680 calibrated")
+        print(f"BME680 calibrated with = {average_diff:.7f} hPa")
     else:
         print(f"ERROR IN BME680 hpa_calibration = None!")
 
@@ -618,8 +644,7 @@ def main():
 
         if button2():
             sea_level_pressure = adjust_altitude_slp(
-                buzz=True,
-                bmp_update=not error_bmp585,
+                gps=gps,
                 is_metric=is_metric,
                 altitude_m=altitude_m,
                 pressure_hpa=pressure_hpa,
