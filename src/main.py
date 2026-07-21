@@ -97,6 +97,7 @@ button_3_pushed = False
 # buzzer = ??
 
 # Initialize the SSD1680 e-ink hardware & Pillow canvas
+# TODO Add timeout from pi_zero_utils.py
 print("Initialize Eink...")
 epd_disp, epd_draw, epd_font_small, epd_image = init_eink_display()
 print("Eink Initialized")
