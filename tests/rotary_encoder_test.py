@@ -5,19 +5,19 @@ Rotary Encoder Port for Raspberry Pi Zero
 Adjusts new_alt_feet by +/- 1ft per detent, or by 25 ft if the push button is toggled.
 
 Hardware Configuration Pi Zero
-    Encoder CLK: gpio 13 (Pin 33)
-    Encoder DT:  gpio 19 (Pin 35)
-    Encoder SW:  gpio 26 (Pin 37)
-    3v3    - pin 17 of 2x20
+    Encoder CLK: gpio 21 (Pin 40)
+    Encoder DT:  gpio 13 (Pin 33)
+    Encoder SW:  gpio 19 (Pin 35)
+    3v3    - 3v3
     Ground - pin 39 of 2x20
 """
 
 import time
 from gpiozero import RotaryEncoder, Button
 
-# Rotary encoder setup
-encoder = RotaryEncoder(a=13, b=19, bounce_time=0.005)
-rotary_switch = Button(26, pull_up=True, bounce_time=0.05)
+# Rotary encoder setup (CLK=a, DT=b)
+encoder = RotaryEncoder(a=21, b=13, bounce_time=0.005)
+rotary_switch = Button(19, pull_up=True, bounce_time=0.05)
 
 DEBUG = True
 SWITCH_MULTIPLIER = 25
