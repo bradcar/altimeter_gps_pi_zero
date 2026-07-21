@@ -640,8 +640,7 @@ def main():
     else:
         print(f"ERROR IN BME680 hpa_calibration = None!")
 
-    # Start GPS
-    # GPS on Pi Zero uses UART with pyserial library
+    # Start GPS, on Pi Zero uses UART with pyserial library
     print("Initialize GPS...")
     uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=10)
     gps = adafruit_gps.GPS(uart, debug=False)
@@ -659,7 +658,6 @@ def main():
     altitude_reference_splash(is_metric)
 
     # main loop variables
-
     # show_env_details = False
 
     # Display modes: 0 = Big Dashboard, 1 = Altimeter Details, 2 = GPS Details
@@ -690,8 +688,7 @@ def main():
     iaq = None
     humidity = None
 
-    # GPS
-    # PDX DST -7 hours
+    # GPS - PDX DST -7 hours
     time_zone_hours = -7
     time_zone_string = "PDX"
     day_light_savings_string = "DST"
