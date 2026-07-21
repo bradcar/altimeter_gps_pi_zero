@@ -62,6 +62,9 @@ def scan_i2c_bus(i2c_primary):
             elif address in (0x1C, 0x1E):
                 identity = "likely LIS3MDL Magnetometer"
                 lis3mdl_detected = address
+            elif address in (0x14,):
+                identity = "likely Waveshare Eink Touch "
+                waveshare_touch_detected = address
             else:
                 identity = "unknown device signature"
 
