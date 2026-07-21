@@ -1,6 +1,13 @@
 # eink_ssd1680_gt911.py
 """
 General Utils for Waveshare 2.13" E-Paper Touch Hat (epd2in13_V4)
+
+Waveshare E-ink touch Hat 2.13" SSD1680 + GT911 (touch)
+        20716: 2.13" Touch e-Paper HAT (with Pi Zero Case)
+        Has partial updates
+        https://www.waveshare.com/wiki/2.13inch_Touch_e-Paper_HAT_Manual
+
+
 """
 from PIL import Image, ImageDraw, ImageFont
 from waveshare_epd import epd2in13_V4
