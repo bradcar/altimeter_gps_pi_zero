@@ -10,6 +10,15 @@ Sensors used
     - Touch display 5 points
     - Metric/Imperial switch
 
+Display
+    - Started with Adafruit E-ink 2.13" SSD1680
+        It has no partial refresh
+
+    - Moving to Waveshare E-ink touch Hat 2.13" SSD1680 + GT911 (touch)
+        20716: 2.13" Touch e-Paper HAT (with Pi Zero Case)
+        Has partial updates
+        https://www.waveshare.com/wiki/2.13inch_Touch_e-Paper_HAT_Manual
+
 Use sea level pressure at nearest airport
 
 Use nearest airport for sea level pressure
@@ -506,7 +515,7 @@ def gps_clock_string(gps: GPS, time_zone_hours: int):
 def main():
     global SLP_CALIBRATION_BMP585, SLP_CALIBRATION_BME680, i2c1, sea_level_pressure, slp_hpa_bmp585, slp_hpa_bme680
 
-    is_metric = False
+    is_metric = True
     warning_toggle = 0
 
     print("\nStarting...")
@@ -635,9 +644,14 @@ def main():
         start_loop_tick = time.monotonic()
         current_time = time.monotonic()
 
+        force_eink_update = False
+
+        # Button 1: Unit toggle
         if button1():
             is_metric = not is_metric
+            force_eink_update = True
 
+        # Button 2: Altitude/SLP Calibration
         if button2():
             sea_level_pressure = adjust_altitude_slp(
                 gps=gps,
@@ -646,10 +660,13 @@ def main():
                 pressure_hpa=pressure_hpa,
                 sea_level_pressure_hpa=sea_level_pressure,
             )
+            force_eink_update = True
 
+        # Button 3: Display Mode Toggle (Big Dash -> Details -> GPS)
         if button3():
-            # show_env_details = not show_env_details
             display_mode = (display_mode + 1) % 3
+            print(f"* Switched to Display Mode: {display_mode}")
+            force_eink_update = True
 
         # Temperature and standard ambient metrics (Every 2 seconds)
         if (current_time - last_sensor_time) >= SENSOR_INTERVAL_SEC or first_run:
@@ -727,18 +744,18 @@ def main():
         if (current_time - last_clock_set_time) >= SET_CLOCK_INTERVAL_SEC:
             sync_time_requested = True
 
-        # E-ink Display Refresh (Every 5 seconds)
-        if (current_time - last_eink_time) >= EINK_INTERVAL_SEC:
-            # TODO validate need for values_changed (seems better to let Eink partial updates)
-            values_changed = False
-            if prev_alt is None or abs(altitude_m - prev_alt) > 0.05 or abs(pressure_hpa - prev_press) > 0.02:
-                values_changed = True
+        # E-ink Display Refresh (Triggers on 5s timer OR immediately on force_eink_update)
+        if force_eink_update or (current_time - last_eink_time) >= EINK_INTERVAL_SEC:
 
-            # Instant trigger if a button action set a flag
-            button_pressed = button_1_pushed or button_2_pushed or button_3_pushed
+            # Detect significant sensor change if forced refresh didn't happen
+            values_changed = (
+                    prev_alt is None or
+                    abs(altitude_m - prev_alt) > 0.05 or
+                    abs(pressure_hpa - prev_press) > 0.02
+            )
 
-            if values_changed or button_pressed:
-                last_eink_time = current_time  # Reset timer if push pixels
+            if force_eink_update or values_changed:
+                last_eink_time = current_time  # Reset the 5s interval timer
                 prev_alt = altitude_m
                 prev_press = pressure_hpa
 
@@ -746,7 +763,8 @@ def main():
                 if display_mode == 0:
                     display_big_dashboard(buzzer_sound, altitude_m, pressure_hpa, iaq, gps, is_metric)
                 elif display_mode == 1:
-                    display_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric)
+                    display_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq,
+                                              is_metric)
                 elif display_mode == 2:
                     display_gps_details(gps)
 
