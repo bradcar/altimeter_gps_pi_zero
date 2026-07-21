@@ -28,7 +28,6 @@ from time import sleep as zzz
 import adafruit_gps
 from adafruit_gps import GPS
 
-
 from PIL import ImageFont
 from gpiozero import Button, RotaryEncoder
 
@@ -54,7 +53,6 @@ SENSOR_INTERVAL_SEC = 2.0  # Read core pressure, temp, & other metrics every 2 s
 EINK_INTERVAL_SEC = 5.0  # Limit E-ink refresh to every 5 seconds
 GAS_INTERVAL_SEC = 30.0  # Read gas IAQ metrics every 30 seconds
 SET_CLOCK_INTERVAL_SEC = 24 * 60 * 60  # Set system time every day based on GPS
-
 
 INIT_SEA_LEVEL_PRESSURE = 1018.10
 
@@ -223,7 +221,6 @@ def altitude_reference_splash(is_metric):
     zzz(5)
 
 
-# Definition with parameters instead of global dependencies:
 def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pressure_hpa):
     """
     Adjust the altitude using the rotary encoder and update Sea Level Pressure (SLP).
@@ -303,6 +300,7 @@ def show_updated_altitude_display(alt, press, is_metric):
     epd_draw.text((10, 46), "Alt", font=font_small, fill=255)
 
     # Formatted to 0 decimals so text fits comfortably on screen
+    # TODO Adjust this for more info on display
     alt_val = f"{(alt * convert):.0f}{unit}"
     epd_draw.text((60, 28), alt_val, font=font_big, fill=255)
 
@@ -597,14 +595,12 @@ def main():
 
     buzzer_sound = True
 
-
     # Store previous values to detect actual changes
     prev_alt = None
     prev_press = None
 
     first_run = True
     sync_time_requested = True  # True for first time, then every day, at next fix will set system clock
-
 
     current_time = time.monotonic()
     last_sensor_time = 0.0  # Force instant execution on the first loop
