@@ -1,6 +1,12 @@
 """
-General Utils for Waveshare 2.13" E-Paper Touch Hat (epd2in13_V4)
-Includes GT911 Touch Controller Driver & Canvas Helpers.
+Utils for Waveshare 2.13" E-Paper Touch Hat (epd2in13_V4)
+Driver &  canvas helpers
+
+Features
+ * Display250px x 122px
+ * GT911 Touch Controller
+ * Rotated display
+
 """
 import sys
 import time
@@ -193,7 +199,7 @@ class GT911Touch:
         self.finger_down = False
 
     def _clear_status_register(self):
-        """Clears 0x814E by writing 0x00."""
+        """Clears 0x814E status register by writing 0x00."""
         try:
             reg_msb = (GT911_READ_COORD_ADDR >> 8) & 0xFF
             reg_lsb = GT911_READ_COORD_ADDR & 0xFF
@@ -216,12 +222,12 @@ _gt911_driver = None
 def init_eink_display():
     global epd_disp, epd_image, epd_draw, _gt911_driver
 
-    # Initialize E-Paper Display hardware first
+    # Initialize E-Paper Display before touch
     epd_disp = epd2in13_V4.EPD()
     epd_disp.init(epd_disp.FULL_UPDATE)
     epd_disp.Clear(0xFF)
 
-    # Reset and wake up GT911 Touch Chip
+    # Reset GT911 Touch Chip
     reset_gt911()
 
     # Instantiate GT911 Driver
@@ -268,7 +274,7 @@ def check_touch_inputs(cooldown_sec: float = 0.8) -> list[TouchPoint]:
 
 
 def flush_touch_inputs():
-    """Flushes stale touch points from the GT911 buffer."""
+    """Flushes stale touch data from the GT911 buffer."""
     global _gt911_driver
     if _gt911_driver is not None:
         _gt911_driver.flush_buffer()
