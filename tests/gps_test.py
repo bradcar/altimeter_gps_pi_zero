@@ -3,6 +3,10 @@
 Simple GPS module demonstration.
 Waits for a fix and print a message every second with the current location and other details.
 
+Use nearest airport for sea level pressure
+    Portland updated hourly (7 min before the hour)
+        https://www.weather.gov/wrh/timeseries?site=KPDX
+
 Initialize the GPS module by changing what data it sends and at what rate.
 using PMTK_314_SET_NMEA_OUTPUT and PMTK_220_SET_NMEA_UPDATERATE:
     https://cdn-shop.adafruit.com/datasheets/PMTK_A11.pdf
@@ -16,7 +20,7 @@ Significant figures in Lat/Long
 5	1.11 m (3.6 ft)	Front door, trail
 6	11.1 cm (4.4 in)	Survey-grade detail (more precision than most GPS receivers)
 
-TODO can't feed altitude back to this GPS module, need u-blox modules
+TODO can't feed altitude back to Adafruit GPS modules, need to buy u-blox GPSmodules
     need something like: https://www.sparkfun.com/sparkfun-gps-breakout-neo-m9n-u-fl-qwiic.html
 
 Code based on Adafruit:
@@ -24,27 +28,19 @@ Code based on Adafruit:
 # SPDX-License-Identifier: MIT
 """
 
-import serial
 import time
 
-import adafruit_gps
-from gps_utils import get_local_time, get_map_string
+from gps_utils import get_time_from_gps, get_map_string, initialize_gps
 
 
 def main():
-    # GPS on Pi Zero uses UART with pyserial library
-    uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=10)
-    gps = adafruit_gps.GPS(uart, debug=False)
+    gps = initialize_gps()
 
-    # Turn on the basic GGA, RMC, GGA(Accuracy), update time 1sec, 1Hz (check UART timeout)
-    gps.send_command(b"PMTK314,0,1,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0")
-    gps.send_command(b"PMTK220,1000")
-
-    last_gps_time= time.monotonic()
+    last_gps_time = time.monotonic()
     while True:
         has_new_gps = gps.update()
 
-        # Every second print out current location details if there's a fix.
+        # Every 1 sec, print out current location details if there's a fix.
         current = time.monotonic()
         if current - last_gps_time >= 1.0:
             last_gps_time = current
@@ -59,7 +55,7 @@ def main():
             time_zone_hours = -7
             time_zone_string = "PDX"
             day_light_savings_string = "DST"
-            local_time = get_local_time(gps, time_zone_hours)
+            local_time = get_time_from_gps(gps, time_zone_hours)
 
             print(
                 "PDX DST timestamp: {}/{}/{} {:02}:{:02}:{:02}".format(  # noqa: UP032
