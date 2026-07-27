@@ -2,6 +2,13 @@
 """
 Touch Quadrant & Coordinate Calibration Script
 Tests GT911 touch coordinate mapping on Waveshare 2.13" E-Paper HAT (250x122)
+
+Zones:
+    "Upper Left (Btn 3)"      x <= 125, y <= 61
+    "Lower Left (Btn 2)"      x <= 125, y >  61
+    "Upper Right (Btn 1)"     x >  125, y <= 61
+    "Lower Right (Reserved)"  x >  125, y >  61
+
 """
 
 import time
@@ -64,11 +71,26 @@ def process_touch_data():
     raw_x, raw_y = touch.x, touch.y
 
     # --- YOUR CALIBRATED SCALING ---
-    # Invert raw_y so Left touch -> X near 0, Right touch -> X near 249
-    x = int(((85.0 - raw_y) / 85.0) * (SCREEN_WIDTH - 1))
+    RAW_X_MIN = 130.0  # Top edge (Display Y = 0)
+    RAW_X_MAX = 240.0  # Bottom edge (Display Y = 121)
 
-    # Scale raw_x (120..220) cleanly to Display Y (0..122)
-    y = int(((raw_x - 120) / 100.0) * (SCREEN_HEIGHT - 1))
+    RAW_Y_MIN = 0.0  # Right edge (Display X = 249)
+    RAW_Y_MAX = 113.0  # Left edge (Display X = 0)
+
+    # 1. Map Raw Y -> Display X (Inverted: high raw_y is left side)
+    x = int(((RAW_Y_MAX - raw_y) / (RAW_Y_MAX - RAW_Y_MIN)) * (SCREEN_WIDTH - 1))
+
+    # 2. Map Raw X -> Display Y (Normal: high raw_x is bottom side)
+    y = int(((raw_x - RAW_X_MIN) / (RAW_X_MAX - RAW_X_MIN)) * (SCREEN_HEIGHT - 1))
+
+    # Clamp bounds so crosshairs stay inside 0..249 and 0..121
+    x = max(0, min(SCREEN_WIDTH - 1, x))
+    y = max(0, min(SCREEN_HEIGHT - 1, y))
+    # # Invert raw_y so Left touch -> X near 0, Right touch -> X near 249
+    # x = int(((85.0 - raw_y) / 85.0) * (SCREEN_WIDTH - 1))
+    #
+    # # Scale raw_x (120..220) cleanly to Display Y (0..122)
+    # y = int(((raw_x - 120) / 100.0) * (SCREEN_HEIGHT - 1))
 
     # Clamp boundaries
     x = max(0, min(SCREEN_WIDTH - 1, x))
