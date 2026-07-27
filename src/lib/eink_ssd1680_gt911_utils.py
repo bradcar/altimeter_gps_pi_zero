@@ -7,6 +7,11 @@ Features
  * GT911 Touch Controller
  * Rotated display
 
+
+https://www.waveshare.com/wiki/2.13inch_Touch_e-Paper_HAT_Manual#Raspberry_Pi
+wget https://files.waveshare.com/upload/4/4e/Touch_e-Paper_Code.zip
+unzip Touch_e-Paper_Code.zip -d Touch_e-Paper_Code
+
 """
 import sys
 import time
@@ -72,7 +77,7 @@ def reset_gt911():
         epdconfig.digital_write(RST_PIN, 1)
         time.sleep(0.05)
 
-        print(" * GT911 Eink Touch reset at 0x14 (via epdconfig)")
+        print(" * GT911 Eink Touch reset at I2C 0x14 ")
 
     except Exception as e:
         print(f"* GT911 Eink touch reset error: {e}")
@@ -103,13 +108,13 @@ class GT911Touch:
                         smbus2.i2c_msg.read(addr, 4)
                     )
                     self.address = addr
-                    print(f" * GT911: Eink Touch detected at I2C address 0x{addr:02X}")
+                    print(f" * GT911 Eink Touch detected at I2C address 0x{addr:02X}")
                     return
                 except Exception:
                     continue
-            print("GT911 WARNING: No Eink Touch responded at 0x14 or 0x5D!")
+            print("GT911 WARNING: No Eink Touch responded at 0x14 or 0x5D")
         except Exception as e:
-            print(f"GT911: Failed to open I2C bus {self.bus_num}: {e}")
+            print(f"GT911 ERROR: Failed to open I2C bus {self.bus_num}: {e}")
             self.bus = None
 
     def read_touch_points(self) -> list[TouchPoint]:
