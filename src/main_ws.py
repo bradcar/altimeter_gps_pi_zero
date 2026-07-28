@@ -46,7 +46,8 @@ from gps_utils import initialize_gps
 from lib.bme680 import BME680_I2C
 from lib.bme680_utils import iaq_quality_to_string, calculate_iaq
 # from lib.eink_ssd1680_utils import init_eink_display, refresh_eink_display
-from lib.eink_ssd1680_gt911_utils import init_eink_display, refresh_eink_display, check_touch_inputs, flush_touch_inputs
+from lib.eink_ssd1680_gt911_utils import init_eink_display, refresh_eink_display, check_touch_inputs, \
+    flush_touch_inputs, align_touch_point_to_display
 from lib.gps_utils import get_time_from_gps, get_map_string, get_lat_string, get_lon_string, set_pi_system_time_from_gps
 from lib.micropython_bmpxxx import bmpxxx
 from lib.pi_zero_i2c_bridge_utils import PiZeroI2CBridge
@@ -58,13 +59,14 @@ OVER_TEMP_WARNING = 70.0
 
 SCREEN_WIDTH = 250
 SCREEN_HEIGHT = 122
+DISPLAY_ROTATION = 90
 RAW_TOUCH_MAX_X = 122
 RAW_TOUCH_MAX_Y = 250
 
 # Timing Constants (in seconds)
 LOOP_STRETCH_SLEEP = 0.1  # Small sleep each loop
 GPS_INTERVAL_SEC = 1.0  # Read GPS metrics every 1 seconds
-SENSOR_INTERVAL_SEC = 2.0  # Read core pressure, temp, & other metrics every 2 seconds
+SENSOR_INTERVAL_SEC = 1.0  # Read core pressure, temp, & other metrics every 2 seconds
 EINK_INTERVAL_SEC = 5.0  # Limit E-ink refresh to every 5 seconds
 GAS_INTERVAL_SEC = 30.0  # Read gas IAQ metrics every 30 seconds
 SET_CLOCK_INTERVAL_SEC = 24 * 60 * 60  # Set system time every day based on GPS
@@ -80,15 +82,16 @@ def uname():
 
 
 # Buttons
-# TODO ignore Button 1: cm/in toggle (GPIO 6)
+# Button 1: Detail/Summary layout toggle (GPIO 15)
+#           E-ink: "Down" Button: actually GPIO 5 NOT GPIO 6
 # Button 2: Adjust altitude/SLP (GPIO 5)
 #           E-ink: "Up" Button: actually GPIO 6 NOT GPIO 5
-# Button 3: Detail/Summary layout toggle (GPIO 15)
-#           E-ink: "Down" Button: actually GPIO 5 NOT GPIO 6
+# TODO ignore Button 3: cm/in toggle (GPIO 6)
 
-button_1 = Button(16, pull_up=True, bounce_time=0.05)
+
+button_1 = Button(6, pull_up=True, bounce_time=0.05)
 button_2 = Button(5, pull_up=True, bounce_time=0.05)
-button_3 = Button(6, pull_up=True, bounce_time=0.05)
+button_3 = Button(16, pull_up=True, bounce_time=0.05)
 
 # a = clk, b = DT
 encoder = RotaryEncoder(a=21, b=13, bounce_time=0.005)
@@ -137,13 +140,11 @@ debounce_2_time = 0
 debounce_3_time = 0
 
 
-def button_1_handler():
-    global button_1_pushed, debounce_1_time
-    if (ticks_ms() - debounce_1_time) > 250:
-        button_1_pushed = True
-        debounce_1_time = ticks_ms()
-        debounce_1_time = ticks_ms()
-
+def button_3_handler():
+    global button_3_pushed, debounce_3_time
+    if (ticks_ms() - debounce_3_time) > 250:
+        button_3_pushed = True
+        debounce_3_time = ticks_ms()
 
 def button_2_handler():
     global button_2_pushed, debounce_2_time
@@ -152,11 +153,11 @@ def button_2_handler():
         debounce_2_time = ticks_ms()
 
 
-def button_3_handler():
-    global button_3_pushed, debounce_3_time
-    if (ticks_ms() - debounce_3_time) > 250:
-        button_3_pushed = True
-        debounce_3_time = ticks_ms()
+def button_1_handler():
+    global button_1_pushed, debounce_1_time
+    if (ticks_ms() - debounce_1_time) > 250:
+        button_1_pushed = True
+        debounce_1_time = ticks_ms()
 
 
 button_1.when_pressed = button_1_handler
@@ -240,45 +241,34 @@ def altitude_reference_splash(is_metric):
 
 
 def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pressure_hpa):
-    """
-    Adjust the altitude using the rotary encoder and update Sea Level Pressure (SLP).
-    """
     new_alt = altitude_m
     new_slp = sea_level_pressure_hpa
     rotary_multiplier = 1
     rotary_old = encoder.steps
 
     print(f"Adjustment start: alt = {new_alt:.1f} m")
-
-    # Initial draw
     need_redraw = True
 
     while not button2():
-        # Read touch quadrant inputs during calibration
         check_touch_buttons()
 
-        # Keep GPS UART buffer clear in background
         if gps is not None:
             gps.update()
 
-        # Handle unit toggle (Physical Button 1 OR Upper Right Touch)
-        if button1():
+        if button3():
             is_metric = not is_metric
             need_redraw = True
 
-        # Handle multiplier toggle switch (press once to toggle x1 / x100)
         if rotary_switch.is_pressed:
             rotary_multiplier = 100 if rotary_multiplier == 1 else 1
             print(f"Rotary multiplier: {rotary_multiplier}")
             while rotary_switch.is_pressed:
                 zzz(0.01)
 
-        # Handle encoder movement
         rotary_new = encoder.steps
         if rotary_old != rotary_new:
             delta = rotary_new - rotary_old
 
-            # Step in Meters (1m / 100m) or Feet (1ft / 100ft) based on active unit
             if is_metric:
                 new_alt += delta * rotary_multiplier
             else:
@@ -288,14 +278,12 @@ def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pres
             rotary_old = rotary_new
             need_redraw = True
 
-        # Only refresh E-Ink when an actual state change occurred
         if need_redraw:
             show_updated_altitude_display(new_alt, new_slp, is_metric)
             need_redraw = False
 
-        zzz(0.05)  # Yield CPU to keep utilization low
+        zzz(0.03)
 
-    # Save newly calculated SLP to disk on exit
     try:
         with open("last-sea-level-pressure.txt", "w") as data_file:
             data_file.write(f"{new_slp:.2f}")
@@ -310,18 +298,16 @@ def show_updated_altitude_display(alt, press, is_metric):
     Renders current calibration values to E-Ink display.
     """
     epd_draw.rectangle((0, 0, 250, 122), fill=0)
-
-    convert, unit = metric_format(is_metric)
-
     epd_draw.text((10, 5), "Setting Altitude...", font=font_small, fill=255)
-    epd_draw.line((10, 23, 240, 23), fill=255, width=1)
+    epd_draw.line((10, 23, 250, 23), fill=255, width=1)
 
     # New Altitude Data
     epd_draw.text((10, 32), "New", font=font_small, fill=255)
     epd_draw.text((10, 46), "Alt", font=font_small, fill=255)
 
-    # Formatted to 0 decimals so text fits comfortably on screen
+    # Formatted to 0 decimals so text fits  on screen
     # TODO Adjust this for more info on display
+    convert, unit = metric_format(is_metric)
     alt_val = f"{(alt * convert):.0f}{unit}"
     epd_draw.text((60, 28), alt_val, font=font_big, fill=255)
 
@@ -335,8 +321,8 @@ def show_updated_altitude_display(alt, press, is_metric):
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=True)
     flush_touch_inputs()
 
-def print_altimeter_details(buzz, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric):
 
+def print_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric):
     print("=" * 40)  # Print a separator line.
     clock_string = time.strftime("%I:%M:%S", time.localtime())
     # print(f"Altimeter Details  {clock_string}")
@@ -358,14 +344,19 @@ def print_altimeter_details(buzz, altitude_m, pressure_hpa, temp_c, humidity, ia
     print(f"IAQ {iaq_string}")
 
 
-def display_altimeter_details(buzz, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric):
+def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric, is_final=False):
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
     epd_draw.text((3, 5), "Altimeter Details", font=font_small, fill=0)
-    clock_string = time.strftime("%I:%M:%S", time.localtime())
-    clock_width = font_small.getlength(clock_string)
-    epd_draw.text((240 - clock_width, 5), clock_string, font=font_small, fill=0)
+    if not is_final:
+        clock_string = time.strftime("%I:%M:%S", time.localtime())
+        clock_width = font_small.getlength(clock_string)
+        epd_draw.text((250 - clock_width, 5), clock_string, font=font_small, fill=0)
+    else:
+        clock_string = "SLEEP@" + time.strftime("%I:%M", time.localtime())
+        clock_width = font_small.getlength(clock_string)
+        epd_draw.text((250 - clock_width, 5), clock_string, font=font_small, fill=0)
 
-    epd_draw.line((5, 21, 240, 21), fill=0, width=1)
+    epd_draw.line((5, 21, 250, 21), fill=0, width=1)
 
     if is_metric:
         barometer_string = f"{pressure_hpa:.2f} hPa"
@@ -410,12 +401,15 @@ def display_gps_details(gps):
         # Show header with number of Satellites & quality
         sats = gps.satellites if gps.satellites is not None else 0
         qual = gps.fix_quality if gps.fix_quality is not None else 0
-        epd_draw.text((3, 5), f"GPS ({sats} sats, qual={qual})", font=font_small, fill=0)
+        if sats > 0 and qual > 0:
+            epd_draw.text((3, 5), f"GPS ({sats} sats, q={qual})", font=font_small, fill=0)
+        else:
+            epd_draw.text((3, 5), f"GPS   ** NO FIX **", font=font_small, fill=0)
 
         clock_string = time.strftime("%I:%M:%S", time.localtime())
         clock_width = font_small.getlength(clock_string)
-        epd_draw.text((240 - clock_width, 5), clock_string, font=font_small, fill=0)
-        epd_draw.line((5, 21, 240, 21), fill=0, width=1)
+        epd_draw.text((250 - clock_width, 5), clock_string, font=font_small, fill=0)
+        epd_draw.line((5, 21, 250, 21), fill=0, width=1)
 
         # List of GPS metrics
         accuracy_str = f"+/- {gps.vdop * 4:.1f}m" if gps.vdop is not None else "N/A"
@@ -440,7 +434,7 @@ def display_gps_details(gps):
         flush_touch_inputs()
 
 
-def display_big_dashboard(buzz, altitude_m, pressure_hpa, iaq, gps, is_metric):
+def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, is_metric):
     """
     Display main dashboard
     """
@@ -489,7 +483,7 @@ def display_big_dashboard(buzz, altitude_m, pressure_hpa, iaq, gps, is_metric):
 
     # Flash IAQ warning (black banner with white text in the top right)
     if iaq and iaq > 150.0:
-        epd_draw.rectangle((180, 2, 240, 20), fill=0)
+        epd_draw.rectangle((180, 2, 250, 20), fill=0)
         epd_draw.text((192, 4), "IAQ!", font=font_small, fill=255)
 
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=True)
@@ -550,55 +544,49 @@ def gps_clock_string(gps: GPS, time_zone_hours: int):
     return time_string
 
 
-def check_touch_buttons():
+def check_touch_buttons(rotation: int = DISPLAY_ROTATION):
     """
-    Checks GT911 touch inputs and maps display zones to virtual button presses.
-    Screen bounds: 250px wide x 122px high
-    - Upper Left  (x <= 125, y <= 61) -> Button 3 (Display Mode Toggle, 0:big, 1:Alt, 2: GPS)
-    - Lower Left  (x <= 125, y >  61) -> Button 2 (Altitude / SLP Calibration)
-    - Upper Right (x >  125, y <= 61) -> Button 1 (Metric / Imperial Unit Toggle)
-    - Lower Right (x >  125, y >  61) -> Reserved
+    Checks GT911 touch inputs using aligned display coordinates.
 
+    Coordinate System:
+    - y: Display Width / Horizontal Axis  (0 .. 249, Left to Right)
+    - x: Display Height / Vertical Axis   (0 .. 121, Top to Bottom)
+
+    Display/Touch Zones:
+    - Upper Left  (y <= 125, x <= 61) -> Button 1 (Display Mode Toggle)
+    - Lower Left  (y <= 125, x >  61) -> Button 2 (Altitude / SLP Calibration)
+    - Upper Right (y >  125, x <= 61) -> Button 3 (Metric / Imperial Unit Toggle)
+    - Lower Right (y >  125, x >  61) -> Reserved Area
     """
-    global button_1_pushed, button_2_pushed, button_3_pushed
+    global button_3_pushed, button_2_pushed, button_1_pushed
 
-    touch_data = check_touch_inputs()
+    touch_data = check_touch_inputs(rotation=rotation)
     if not touch_data:
         return None
 
     touch = touch_data[0]
-    raw_x, raw_y = touch.x, touch.y
 
-    # --- YOUR CALIBRATED SCALING ---
-    # Invert raw_y so Left touch -> X near 0, Right touch -> X near 249
-    x = int(((85.0 - raw_y) / 85.0) * (SCREEN_WIDTH - 1))
-
-    # Scale raw_x (120..220) cleanly to Display Y (0..122)
-    y = int(((raw_x - 120) / 100.0) * (SCREEN_HEIGHT - 1))
-
-    # Clamp boundaries
-    x = max(0, min(SCREEN_WIDTH - 1, x))
-    y = max(0, min(SCREEN_HEIGHT - 1, y))
+    # Align coordinates using the standardized utility mapper (y = Width, x = Height)
+    y, x = align_touch_point_to_display(touch, rotation=rotation)
 
     # Quadrant Evaluation
-    if x <= 125:
-        if y <= 61:
-            print(f"* Touch Upper Left ({x}, {y}) -> Trigger Button 3")
-            button_3_pushed = True
-        else:
-            print(f"* Touch Lower Left ({x}, {y}) -> Trigger Button 2")
-            button_2_pushed = True
-    else:
-        if y <= 61:
-            print(f"* Touch Upper Right ({x}, {y}) -> Trigger Button 1")
+    if y <= 125:
+        if x <= 61:
+            print(f"* Touch Upper Left (Y={y}, X={x}) -> Trigger Button 1")
             button_1_pushed = True
         else:
-            print(f"* Touch Lower Right ({x}, {y}) -> Reserved Area")
-
+            print(f"* Touch Lower Left (Y={y}, X={x}) -> Trigger Button 2")
+            button_2_pushed = True
+    else:
+        if x <= 61:
+            print(f"* Touch Upper Right (Y={y}, X={x}) -> Trigger Button 3")
+            button_3_pushed = True
+        else:
+            print(f"* Touch Lower Right (Y={y}, X={x}) -> Reserved Area")
 
 
 def main():
-    global SLP_CALIBRATION_BMP585, SLP_CALIBRATION_BME680, i2c1, sea_level_pressure, slp_hpa_bmp585, slp_hpa_bme680
+    global SLP_CALIBRATION_BMP585, SLP_CALIBRATION_BME680, i2c1, sea_level_pressure, slp_hpa_bmp585, slp_hpa_bme680, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric
 
     is_metric = True
     warning_toggle = 0
@@ -724,12 +712,11 @@ def main():
 
         force_eink_update = False
 
-        # Button 1: Unit toggle
+        # Button 1: Display Mode Toggle (Big Dashboard -> Barometer Details -> GPS Details)
         if button1():
-            is_metric = not is_metric
+            display_mode = (display_mode + 1) % 3
+            print(f"* Switched to Display Mode: {display_mode}")
             force_eink_update = True
-            refresh_eink_display(epd_disp, epd_draw, epd_image, partial=False)
-            flush_touch_inputs()
 
         # Button 2: Altitude/SLP Calibration
         if button2():
@@ -741,16 +728,11 @@ def main():
                 sea_level_pressure_hpa=sea_level_pressure,
             )
             force_eink_update = True
-            refresh_eink_display(epd_disp, epd_draw, epd_image, partial=False)
-            flush_touch_inputs()
 
-        # Button 3: Display Mode Toggle (Big Dashboard -> Barometer Details -> GPS Details)
+        # Button 3: Unit toggle
         if button3():
-            display_mode = (display_mode + 1) % 3
-            print(f"* Switched to Display Mode: {display_mode}")
+            is_metric = not is_metric
             force_eink_update = True
-            refresh_eink_display(epd_disp, epd_draw, epd_image, partial=False)
-            flush_touch_inputs()
 
         # Barometer, Temperature, humidity, IAQ (Every 2 seconds)
         if (current_time - last_sensor_time) >= SENSOR_INTERVAL_SEC or first_run:
@@ -784,7 +766,7 @@ def main():
                 bme_meters = calc_altitude(bme_hpa, sea_level_pressure)
                 # print(f"BME680: {bme_hpa} hpa, {bme_temp} °C, {bme_meters} m")
 
-                # Set all metrics with BME680
+                # Update system with BME680 metrics
                 pressure_hpa = bme_hpa
                 temp_c = bme_temp
                 altitude_m = bme_meters
@@ -803,9 +785,8 @@ def main():
                 temp_c = bmp_temp
                 altitude_m = bmp_meters
 
-            #print(f"system: {pressure_hpa:.2f} jpa , {temp_c:.1f} °C, {altitude_m:.3f} m\n")
-            print_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq,
-                                      is_metric)
+            # print(f"system: {pressure_hpa:.2f} jpa , {temp_c:.1f} °C, {altitude_m:.3f} m\n")
+            print_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric)
 
             first_run = False
 
@@ -836,20 +817,23 @@ def main():
                     abs(altitude_m - prev_alt) > 0.05 or
                     abs(pressure_hpa - prev_press) > 0.02
             )
+            #values_changed = True
 
             if force_eink_update or values_changed:
-                last_eink_time = current_time  # Reset the 5s interval timer
+                last_eink_time = current_time
                 prev_alt = altitude_m
                 prev_press = pressure_hpa
 
                 buzzer_sound = None
                 if display_mode == 0:
-                    display_big_dashboard(buzzer_sound, altitude_m, pressure_hpa, iaq, gps, is_metric)
+                    display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, is_metric)
                 elif display_mode == 1:
-                    display_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq,
-                                              is_metric)
+                    display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric)
                 elif display_mode == 2:
                     display_gps_details(gps)
+
+                # Clear stale touch events after rendering new frame
+                flush_touch_inputs()
 
         # Loop cadence control
         # Optional stretch sleep to keep CPU utilization reasonable
@@ -869,12 +853,12 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\nExit (Ctrl-C)")
-
-    except Exception as e:
-        print(f"\nProgram unexpected crash: {e}")
-
-
+        print("\nCaught Ctrl-C.\nRendering final altitude details screen.")
+        try:
+            # Render final display without clearing panel
+            display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric, is_final=True)
+        except Exception as e:
+            print(f"Error drawing final display on exit: {e}")
     finally:
         try:
             i2c1.close()
@@ -882,11 +866,8 @@ if __name__ == "__main__":
             print(f"Failed to close I2C: {e}")
         try:
             if 'epd_disp' in locals() and epd_disp is not None:
-                epd_disp.init(epd_disp.FULL_UPDATE)
-                epd_disp.Clear(0xFF)
                 epd_disp.sleep()
 
-                # Safely exit SPI/GPIO config through driver instance
                 if hasattr(epd_disp, 'epdconfig'):
                     epd_disp.epdconfig.module_exit()
         except Exception as e:
