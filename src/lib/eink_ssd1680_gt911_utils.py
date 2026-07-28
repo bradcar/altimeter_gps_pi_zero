@@ -338,10 +338,32 @@ def flush_touch_inputs():
         _gt911_driver.flush_buffer()
 
 
-def cleanup_eink(display=None):
+def cleanup_eink(display=None, clear=False):
+    """
+    Puts the e-Paper display controller into deep sleep.
+
+    :param display: EPD display instance (falls back to global epd_disp if None).
+    :param clear: If True, flashes screen white before sleeping. If False (default),
+                  leaves the last rendered image static on the display.
+    """
     global epd_disp
     target_epd = display if display is not None else epd_disp
     if target_epd:
-        target_epd.init()
-        target_epd.Clear(0xFF)
-        target_epd.sleep()
+        try:
+            # If clear is requested, initialize full update and flush white
+            if clear:
+                if hasattr(target_epd, 'FULL_UPDATE'):
+                    target_epd.init(target_epd.FULL_UPDATE)
+                else:
+                    target_epd.init()
+                target_epd.Clear(0xFF)
+
+            # Put driver IC into ultra-low-power sleep mode
+            target_epd.sleep()
+
+            # Clean up SPI/GPIO handles if supported
+            if hasattr(target_epd, 'Dev_exit'):
+                target_epd.Dev_exit()
+
+        except Exception as e:
+            print(f"Warning during E-Ink cleanup: {e}")

@@ -37,7 +37,7 @@ except ImportError:
         cleanup_eink,
     )
 
-SCREEN_WIDTH = 250   # Y-axis extent (Horizontal)
+SCREEN_WIDTH = 250  # Y-axis extent (Horizontal)
 SCREEN_HEIGHT = 122  # X-axis extent (Vertical)
 
 # Target Display Rotation relative to Waveshare Native 0° Portrait:
@@ -55,7 +55,7 @@ def draw_test_grid(epd_draw, font_small, last_touch_info="Touch anywhere to test
 
     # Draw quadrant dividing lines
     epd_draw.line((125, 0, 125, 122), fill=0, width=1)  # Vertical split line at Y = 125
-    epd_draw.line((0, 61, 250, 61), fill=0, width=1)   # Horizontal split line at X = 61
+    epd_draw.line((0, 61, 250, 61), fill=0, width=1)  # Horizontal split line at X = 61
 
     # Label Top-Left: Mode Toggle (Button 3)
     epd_draw.text((10, 10), "MODE (Btn 3)", font=font_small, fill=0)
@@ -95,7 +95,7 @@ def process_touch_data(rotation: int = DISPLAY_ROTATION):
     disp_y, disp_x = transform_touch_point(touch, rotation=rotation)
 
     # Clamp bounds safety net
-    y = max(0, min(SCREEN_WIDTH - 1, disp_y))   # Y = Horizontal (0..249)
+    y = max(0, min(SCREEN_WIDTH - 1, disp_y))  # Y = Horizontal (0..249)
     x = max(0, min(SCREEN_HEIGHT - 1, disp_x))  # X = Vertical   (0..121)
 
     # Clean quadrant evaluation (Y = Width/Horizontal, X = Height/Vertical)
@@ -153,9 +153,10 @@ def main():
 
             time.sleep(0.05)
 
+
     finally:
-        print("\nCleaning up Eink display...")
-        cleanup_eink(epd_disp)
+        print("\nCleaning up display hardware...")
+        cleanup_eink(epd_disp, clear=False)
 
 
 if __name__ == "__main__":
