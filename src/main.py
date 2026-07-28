@@ -46,7 +46,7 @@ from barometer_utils import calc_sea_level_pressure, bme_hpa_correction, calc_al
 from lib.bme680 import BME680_I2C
 from lib.bme680_utils import iaq_quality_to_string, calculate_iaq
 from lib.eink_ssd1680_utils import init_eink_display, refresh_eink_display
-from lib.gps_utils import get_local_time, get_map_string, get_lat_string, get_lon_string, set_system_time_from_gps
+from lib.gps_utils import get_time_from_gps, get_map_string, get_lat_string, get_lon_string, set_pi_system_time_from_gps
 from lib.micropython_bmpxxx import bmpxxx
 from lib.pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 from lib.pi_zero_utils import pi_on_chip_temperature, scan_i2c_bus
@@ -465,7 +465,7 @@ def print_gps_metrics(gps: GPS, time_zone_hours: int):
     print("=" * 40)  # Print a separator line.
 
     if gps is not None and gps.has_fix:
-        local_time = get_local_time(gps, time_zone_hours)
+        local_time = get_time_from_gps(gps, time_zone_hours)
         if local_time and getattr(local_time, "tm_hour", None) is not None:
             print(
                 f"PDX DST: {local_time.tm_mon}/{local_time.tm_mday}/{local_time.tm_year} {local_time.tm_hour:02}:{local_time.tm_min:02}:{local_time.tm_sec:02}"
@@ -510,7 +510,7 @@ def print_gps_metrics(gps: GPS, time_zone_hours: int):
 
 def gps_clock_string(gps: GPS, time_zone_hours: int):
     if gps is not None:
-        local_time = get_local_time(gps, time_zone_hours)
+        local_time = get_time_from_gps(gps, time_zone_hours)
         time_string = f"{local_time.tm_hour:02}:{local_time.tm_min:02}:{local_time.tm_sec:02}"
     return time_string
 
@@ -736,7 +736,7 @@ def main():
             if gps.has_fix:
                 print_gps_metrics(gps, time_zone_hours)
                 if sync_time_requested:
-                    if set_system_time_from_gps(gps):
+                    if set_pi_system_time_from_gps(gps):
                         last_clock_set_time = current_time
                         # only after successful time set, turn off sych request flag
                         sync_time_requested = False

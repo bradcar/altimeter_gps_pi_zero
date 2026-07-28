@@ -33,22 +33,21 @@ TODO debug getting ghost pixels on some updates
 
 import os
 import sys
-import serial
 import time
 from time import sleep as zzz
 
-import adafruit_gps
 from adafruit_gps import GPS
 
 from PIL import ImageFont
 from gpiozero import Button, RotaryEncoder
 
 from barometer_utils import calc_sea_level_pressure, bme_hpa_correction, calc_altitude
+from gps_utils import initialize_gps
 from lib.bme680 import BME680_I2C
 from lib.bme680_utils import iaq_quality_to_string, calculate_iaq
-#from lib.eink_ssd1680_utils import init_eink_display, refresh_eink_display
+# from lib.eink_ssd1680_utils import init_eink_display, refresh_eink_display
 from lib.eink_ssd1680_gt911_utils import init_eink_display, refresh_eink_display, check_touch_inputs, flush_touch_inputs
-from lib.gps_utils import get_local_time, get_map_string, get_lat_string, get_lon_string, set_system_time_from_gps
+from lib.gps_utils import get_time_from_gps, get_map_string, get_lat_string, get_lon_string, set_pi_system_time_from_gps
 from lib.micropython_bmpxxx import bmpxxx
 from lib.pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 from lib.pi_zero_utils import pi_on_chip_temperature, scan_i2c_bus
@@ -105,7 +104,7 @@ button_3_pushed = False
 # TODO Add timeout from pi_zero_utils.py
 print("Initialize Eink...")
 epd_disp, epd_draw, epd_font_small, epd_image = init_eink_display()
-print("Eink Initialized")
+print("Eink Initialization Done.")
 
 # Load custom font sizes using Pillow
 try:
@@ -211,7 +210,7 @@ def display_list_names_values(altitude_data: list[tuple[str, str]], font_list, l
 def altitude_reference_splash(is_metric):
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
 
-    epd_draw.text((3, 5), "Oregon Altitudes", font=font_small, fill=0)
+    epd_draw.text((3, 5), "Oregon Altitude Reference", font=font_small, fill=0)
     epd_draw.line((5, 21, 250, 21), fill=0, width=1)
 
     altitude_data = [
@@ -336,6 +335,28 @@ def show_updated_altitude_display(alt, press, is_metric):
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=True)
     flush_touch_inputs()
 
+def print_altimeter_details(buzz, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric):
+
+    print("=" * 40)  # Print a separator line.
+    clock_string = time.strftime("%I:%M:%S", time.localtime())
+    # print(f"Altimeter Details  {clock_string}")
+
+    if is_metric:
+        barometer_string = f"{pressure_hpa:.2f} hPa"
+        temperature_string = f"{temp_c:.1f}° C"
+    else:
+        barometer_string = f"{pressure_hpa * 0.02953:.2f}\""
+        temp_f = (temp_c * 9.0 / 5.0) + 32.0
+        temperature_string = f"{temp_f:.1f}° F"
+    humidity_string = f"{humidity:.1f}%" if humidity is not None else "No Data"
+    iaq_string = f"{iaq:.0f} ({iaq_quality_to_string(iaq)})" if iaq is not None else "No Data"
+
+    print(f"Altitude: {altitude_to_string(altitude_m, 3, is_metric)}")
+    print(f"Barometer: {barometer_string}")
+    print(f"Temperature: {temperature_string}")
+    print(f"Humidity: {humidity_string}")
+    print(f"IAQ {iaq_string}")
+
 
 def display_altimeter_details(buzz, altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric):
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
@@ -386,7 +407,7 @@ def display_gps_details(gps):
     if gps is not None:
         epd_draw.rectangle((0, 0, 250, 122), fill=255)
 
-        # #sats & quality values with fallbacks if lost or partial fix
+        # Show header with number of Satellites & quality
         sats = gps.satellites if gps.satellites is not None else 0
         qual = gps.fix_quality if gps.fix_quality is not None else 0
         epd_draw.text((3, 5), f"GPS ({sats} sats, qual={qual})", font=font_small, fill=0)
@@ -396,7 +417,7 @@ def display_gps_details(gps):
         epd_draw.text((240 - clock_width, 5), clock_string, font=font_small, fill=0)
         epd_draw.line((5, 21, 240, 21), fill=0, width=1)
 
-        # GPS Metrics
+        # List of GPS metrics
         accuracy_str = f"+/- {gps.vdop * 4:.1f}m" if gps.vdop is not None else "N/A"
         alt_str = f"{gps.altitude_m:.1f}m" if gps.altitude_m is not None else "N/A"
         speed_str = f"{gps.speed_knots * 1.15078:.1f} mph" if gps.speed_knots is not None else "0.0 mph"
@@ -425,6 +446,7 @@ def display_big_dashboard(buzz, altitude_m, pressure_hpa, iaq, gps, is_metric):
     """
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
 
+    # title
     # epd_draw.text((1, 5), "Altimeter & GPS", font=font_small, fill=0)
 
     convert, unit = metric_format(is_metric)
@@ -475,11 +497,10 @@ def display_big_dashboard(buzz, altitude_m, pressure_hpa, iaq, gps, is_metric):
 
 
 def print_gps_metrics(gps: GPS, time_zone_hours: int):
-    print()
-    print("=" * 40)  # Print a separator line.
+    print("-" * 40)  # Print a separator line.
 
     if gps is not None and gps.has_fix:
-        local_time = get_local_time(gps, time_zone_hours)
+        local_time = get_time_from_gps(gps, time_zone_hours)
         if local_time and getattr(local_time, "tm_hour", None) is not None:
             print(
                 f"PDX DST: {local_time.tm_mon}/{local_time.tm_mday}/{local_time.tm_year} {local_time.tm_hour:02}:{local_time.tm_min:02}:{local_time.tm_sec:02}"
@@ -524,7 +545,7 @@ def print_gps_metrics(gps: GPS, time_zone_hours: int):
 
 def gps_clock_string(gps: GPS, time_zone_hours: int):
     if gps is not None:
-        local_time = get_local_time(gps, time_zone_hours)
+        local_time = get_time_from_gps(gps, time_zone_hours)
         time_string = f"{local_time.tm_hour:02}:{local_time.tm_min:02}:{local_time.tm_sec:02}"
     return time_string
 
@@ -533,10 +554,11 @@ def check_touch_buttons():
     """
     Checks GT911 touch inputs and maps display zones to virtual button presses.
     Screen bounds: 250px wide x 122px high
-    - Upper Left  (x <= , y <= ) -> Button 3 (Display Mode Toggle)
-    - Lower Left  (x <= , y > )  -> Button 2 (Altitude / SLP Calibration)
-    - Upper Right (x > , y <= )  -> Button 1 (Metric / Imperial Unit Toggle)
-    - Lower Right (x > , y > )   -> Reserved
+    - Upper Left  (x <= 125, y <= 61) -> Button 3 (Display Mode Toggle, 0:big, 1:Alt, 2: GPS)
+    - Lower Left  (x <= 125, y >  61) -> Button 2 (Altitude / SLP Calibration)
+    - Upper Right (x >  125, y <= 61) -> Button 1 (Metric / Imperial Unit Toggle)
+    - Lower Right (x >  125, y >  61) -> Reserved
+
     """
     global button_1_pushed, button_2_pushed, button_3_pushed
 
@@ -609,7 +631,7 @@ def main():
         bmp.pressure_oversample_rate = bmp.OSR128
         bmp.temperature_oversample_rate = bmp.OSR8
         bmp.iir_coefficient = bmp.COEF_7
-        print("BMP585 initialized\n")
+        print("BMP585 initialized")
 
     except Exception as e:
         bmp_exists = False
@@ -619,46 +641,38 @@ def main():
     try:
         with open("last-sea-level-pressure.txt", "r") as data_file:
             sea_level_pressure = float(data_file.read().strip())
-        print(f"Using previous sea level pressure = {sea_level_pressure}")
+        print(f" * Using previous sea level pressure = {sea_level_pressure}")
     except Exception:
         sea_level_pressure = INIT_SEA_LEVEL_PRESSURE
-        print(f"No previous sea level pressure stored in file")
-        print(f"Using program sea level pressure in constant ={sea_level_pressure}")
+        print(f" * No previous sea level pressure stored in file")
+        print(f" * Using program sea level pressure in constant ={sea_level_pressure}")
 
     # Calibrate Barometers
     average_diff = 1.0312750  # fallback hPa correction for BME680, if no BMP585
     if bmp_exists and bme_exists:
         average_diff = bme_hpa_correction(bme, bmp, 25)
-        print(f"BMP585 calibration for BME680 = {average_diff:.7f} hPa")
+        print(f" * BMP585 calibration for BME680 = {average_diff:.7f} hPa")
     elif bme_exists:
-        print(f"No BMP585 to calibrate BME680, using default {average_diff:.7f} hPa")
+        print(f" * No BMP585 to calibrate BME680, using default {average_diff:.7f} hPa")
         # the amount over will be subtracted in calibration code.
 
     bme.hpa_calibration = average_diff
     if bme.hpa_calibration is not None:
-        print(f"BME680 calibrated with = {average_diff:.7f} hPa")
+        print(f" * BME680 calibrated with = {average_diff:.7f} hPa")
     else:
-        print(f"ERROR IN BME680 hpa_calibration = None!")
+        print(f" * ERROR IN BME680 hpa_calibration = None!")
 
-    # Start GPS, on Pi Zero uses UART with pyserial library
-    print("Initialize GPS...")
-    uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=10)
-    gps = adafruit_gps.GPS(uart, debug=False)
+    print(" Barometers Initialization Done.")
 
-    # Turn on the basic GGA, RMC, GGA(Accuracy), update time 1sec, 1Hz (check UART timeout)
-    gps.send_command(b"PMTK314,0,1,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0")
-    gps.send_command(b"PMTK220,1000")
+    # Start GPS, Pi Zero uses UART & pyserial library
+    gps = initialize_gps()
     clock_string = None
-    print("GPS Initialized")
 
     # if buzzer_sound: buzzer.on()
     # zzz(.2)
     # buzzer.off()
 
     altitude_reference_splash(is_metric)
-
-    # main loop variables
-    # show_env_details = False
 
     # Display modes: 0 = Big Dashboard, 1 = Altimeter Details, 2 = GPS Details
     display_mode = 0
@@ -696,6 +710,7 @@ def main():
     prev_alt = None
     prev_press = None
     first_run = True
+    eink_refresh_count = 0
 
     print("\nstart of main loop")
 
@@ -729,7 +744,7 @@ def main():
             refresh_eink_display(epd_disp, epd_draw, epd_image, partial=False)
             flush_touch_inputs()
 
-        # Button 3: Display Mode Toggle (Big Dash -> Details -> GPS)
+        # Button 3: Display Mode Toggle (Big Dashboard -> Barometer Details -> GPS Details)
         if button3():
             display_mode = (display_mode + 1) % 3
             print(f"* Switched to Display Mode: {display_mode}")
@@ -737,16 +752,17 @@ def main():
             refresh_eink_display(epd_disp, epd_draw, epd_image, partial=False)
             flush_touch_inputs()
 
-        # Temperature and standard ambient metrics (Every 2 seconds)
+        # Barometer, Temperature, humidity, IAQ (Every 2 seconds)
         if (current_time - last_sensor_time) >= SENSOR_INTERVAL_SEC or first_run:
             last_sensor_time = current_time
-
-            if DEBUG:
-                print(f"Reading standard sensors at {current_time:.2f}s")
 
             temp = pi_on_chip_temperature()
             if temp > OVER_TEMP_WARNING:
                 print(f"WARNING: Pi Zero on-chip temp = {temp:.1f}° C")
+
+            if DEBUG:
+                clock_string = time.strftime("%I:%M:%S", time.localtime())
+                print(f"\nReading sensors @ {current_time:.2f}s \t{clock_string}")
 
             if error_bme680:
                 print(f"No lower-precision Altitude BME680 sensor: {error_bme680}\n")
@@ -754,7 +770,7 @@ def main():
                 # IAQ Readings (Every 30 seconds), heats chip substrate
                 if (current_time - last_gas_time) >= GAS_INTERVAL_SEC:
                     last_gas_time = current_time
-                    print(f"\nBME680 Gas measurement (every {GAS_INTERVAL_SEC:.0f}s)")
+                    print(f"\nBME680 Gas update (every {GAS_INTERVAL_SEC:.0f}s)")
                     gas_ohms = bme.gas
                     bme_percent_humidity = bme.humidity
                     bme_iaq = calculate_iaq(gas_ohms, bme_percent_humidity)
@@ -766,14 +782,13 @@ def main():
                 bme_hpa = bme.pressure
                 bme_temp = bme.temperature
                 bme_meters = calc_altitude(bme_hpa, sea_level_pressure)
-                print(f"BME680: {bme_hpa}, {bme_temp}, {bme_meters}")
+                # print(f"BME680: {bme_hpa} hpa, {bme_temp} °C, {bme_meters} m")
 
                 # Set all metrics with BME680
                 pressure_hpa = bme_hpa
                 temp_c = bme_temp
                 altitude_m = bme_meters
                 humidity = bme_percent_humidity
-
                 iaq = bme_iaq
 
             if error_bmp585:
@@ -787,11 +802,10 @@ def main():
                 pressure_hpa = bmp_hpa
                 temp_c = bmp_temp
                 altitude_m = bmp_meters
-                print(f"system: {pressure_hpa}, {temp_c}, {altitude_m}\n")
 
-            if error_bme680 and error_bmp585:
-                print("Critical Error: No altitude sensors available.")
-                break
+            #print(f"system: {pressure_hpa:.2f} jpa , {temp_c:.1f} °C, {altitude_m:.3f} m\n")
+            print_altimeter_details(buzzer_sound, altitude_m, pressure_hpa, temp_c, humidity, iaq,
+                                      is_metric)
 
             first_run = False
 
@@ -802,12 +816,12 @@ def main():
             if gps.has_fix:
                 print_gps_metrics(gps, time_zone_hours)
                 if sync_time_requested:
-                    if set_system_time_from_gps(gps):
+                    if set_pi_system_time_from_gps(gps):
                         last_clock_set_time = current_time
                         # only after successful time set, turn off sych request flag
                         sync_time_requested = False
             else:
-                print("Waiting for fix...")
+                print("...Waiting for fix...")
 
         # Every day request that systems time synchronized with GPS
         if (current_time - last_clock_set_time) >= SET_CLOCK_INTERVAL_SEC:
@@ -860,16 +874,20 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\nProgram unexpected crash: {e}")
 
+
     finally:
         try:
             i2c1.close()
         except Exception as e:
             print(f"Failed to close I2C: {e}")
         try:
-            if epd_disp is not None:
+            if 'epd_disp' in locals() and epd_disp is not None:
                 epd_disp.init(epd_disp.FULL_UPDATE)
                 epd_disp.Clear(0xFF)
                 epd_disp.sleep()
-                vendor.epdconfig.module_exit()
+
+                # Safely exit SPI/GPIO config through driver instance
+                if hasattr(epd_disp, 'epdconfig'):
+                    epd_disp.epdconfig.module_exit()
         except Exception as e:
             print(f"Failed to sleep E-ink display: {e}")
