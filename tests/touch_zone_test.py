@@ -1,40 +1,61 @@
-# touch_zone_test.py
 """
 Touch Quadrant & Coordinate Calibration Script
 Tests GT911 touch coordinate mapping on Waveshare 2.13" E-Paper HAT (250x122)
 
-Zones:
-    "Upper Left (Btn 3)"      x <= 125, y <= 61
-    "Lower Left (Btn 2)"      x <= 125, y >  61
-    "Upper Right (Btn 1)"     x >  125, y <= 61
-    "Lower Right (Reserved)"  x >  125, y >  61
+Display coordinates - aligned with Pillow coordinates
+Origin (0,0): Top-Left corner of the screen.
+Y: Display Width (SCREEN_WIDTH): 250 pixels, 0 to 249 (Left → Right)
+X: Display Height (SCREEN_HEIGHT): 122 pixels, 0 to 121 (Top → Bottom)
 
+Display/Toudh Zones:
+    "Upper Left (Btn 3)"      y <= 125, x <= 61
+    "Lower Left (Btn 2)"      y <= 125, x >  61
+    "Upper Right (Btn 1)"     y >  125, x <= 61
+    "Lower Right (Reserved)"  y >  125, x >  61
 """
 
 import time
 from PIL import ImageFont
-from lib.eink_ssd1680_gt911_utils import (
-    init_eink_display,
-    refresh_eink_display,
-    check_touch_inputs,
-    flush_touch_inputs,
-)
 
-SCREEN_WIDTH = 250
-SCREEN_HEIGHT = 122
-RAW_TOUCH_MAX_X = 122
-RAW_TOUCH_MAX_Y = 250
+# Fallback import handles running from root or from a parent script directory
+try:
+    from lib.eink_ssd1680_gt911_utils import (
+        init_eink_display,
+        refresh_eink_display,
+        check_touch_inputs,
+        flush_touch_inputs,
+        transform_touch_point,
+        cleanup_eink,
+    )
+except ImportError:
+    from eink_ssd1680_gt911_utils import (
+        init_eink_display,
+        refresh_eink_display,
+        check_touch_inputs,
+        flush_touch_inputs,
+        transform_touch_point,
+        cleanup_eink,
+    )
+
+SCREEN_WIDTH = 250   # Y-axis extent (Horizontal)
+SCREEN_HEIGHT = 122  # X-axis extent (Vertical)
+
+# Target Display Rotation relative to Waveshare Native 0° Portrait:
+#   90  = Standard Landscape (250x122)
+#   270 = Flipped Landscape (250x122)
+DISPLAY_ROTATION = 90
 
 
-def draw_test_grid(epd_draw, font_small, font_medium, last_touch_info="Touch anywhere to test"):
+def draw_test_grid(epd_draw, font_small, last_touch_info="Touch anywhere to test"):
     """
     Draws quadrant boundaries, zone labels, and the last detected touch.
+    Pillow ImageDraw takes coordinates in (horizontal_y, vertical_x) order.
     """
     epd_draw.rectangle((0, 0, SCREEN_WIDTH, SCREEN_HEIGHT), fill=255)
 
     # Draw quadrant dividing lines
-    epd_draw.line((125, 0, 125, 122), fill=0, width=1)  # Vertical split (X = 125)
-    epd_draw.line((0, 61, 250, 61), fill=0, width=1)  # Horizontal split (Y = 61)
+    epd_draw.line((125, 0, 125, 122), fill=0, width=1)  # Vertical split line at Y = 125
+    epd_draw.line((0, 61, 250, 61), fill=0, width=1)   # Horizontal split line at X = 61
 
     # Label Top-Left: Mode Toggle (Button 3)
     epd_draw.text((10, 10), "MODE (Btn 3)", font=font_small, fill=0)
@@ -52,112 +73,95 @@ def draw_test_grid(epd_draw, font_small, font_medium, last_touch_info="Touch any
     epd_draw.text((135, 71), "RESERVED", font=font_small, fill=0)
     epd_draw.text((135, 89), "Lower Right", font=font_small, fill=0)
 
-    # Status Bar / Touch Feedback at the bottom center or overlay
-    epd_draw.rectangle((5, 105, 245, 120), fill=0)
-    epd_draw.text((10, 106), last_touch_info, font=font_small, fill=255)
+    # Status Bar / Touch Feedback at the bottom overlay
+    epd_draw.rectangle((5, 100, 245, 120), fill=0)
+    epd_draw.text((10, 103), last_touch_info, font=font_small, fill=255)
 
 
-def process_touch_data():
+def process_touch_data(rotation: int = DISPLAY_ROTATION):
     """
-    GT911 mapping using measured hardware bounds:
-    Raw Y (~0..85) -> Display X (0..250)
-    Raw X (~120..220) -> Display Y (0..122)
+    Reads hardware touch inputs and transforms them using the GT911 utility mapper.
+    Maps transformed output so Y = Horizontal (Width) and X = Vertical (Height).
     """
-    touch_data = check_touch_inputs()
+    touch_data = check_touch_inputs(rotation=rotation)
     if not touch_data:
         return None
 
     touch = touch_data[0]
     raw_x, raw_y = touch.x, touch.y
 
-    # --- YOUR CALIBRATED SCALING ---
-    RAW_X_MIN = 130.0  # Top edge (Display Y = 0)
-    RAW_X_MAX = 240.0  # Bottom edge (Display Y = 121)
+    # transform_touch_point returns (width_coord, height_coord) from hardware.
+    # Map them to Y (Horizontal Width) and X (Vertical Height):
+    disp_y, disp_x = transform_touch_point(touch, rotation=rotation)
 
-    RAW_Y_MIN = 0.0  # Right edge (Display X = 249)
-    RAW_Y_MAX = 113.0  # Left edge (Display X = 0)
+    # Clamp bounds safety net
+    y = max(0, min(SCREEN_WIDTH - 1, disp_y))   # Y = Horizontal (0..249)
+    x = max(0, min(SCREEN_HEIGHT - 1, disp_x))  # X = Vertical   (0..121)
 
-    # 1. Map Raw Y -> Display X (Inverted: high raw_y is left side)
-    x = int(((RAW_Y_MAX - raw_y) / (RAW_Y_MAX - RAW_Y_MIN)) * (SCREEN_WIDTH - 1))
-
-    # 2. Map Raw X -> Display Y (Normal: high raw_x is bottom side)
-    y = int(((raw_x - RAW_X_MIN) / (RAW_X_MAX - RAW_X_MIN)) * (SCREEN_HEIGHT - 1))
-
-    # Clamp bounds so crosshairs stay inside 0..249 and 0..121
-    x = max(0, min(SCREEN_WIDTH - 1, x))
-    y = max(0, min(SCREEN_HEIGHT - 1, y))
-    # # Invert raw_y so Left touch -> X near 0, Right touch -> X near 249
-    # x = int(((85.0 - raw_y) / 85.0) * (SCREEN_WIDTH - 1))
-    #
-    # # Scale raw_x (120..220) cleanly to Display Y (0..122)
-    # y = int(((raw_x - 120) / 100.0) * (SCREEN_HEIGHT - 1))
-
-    # Clamp boundaries
-    x = max(0, min(SCREEN_WIDTH - 1, x))
-    y = max(0, min(SCREEN_HEIGHT - 1, y))
-
-    # Clean, standard quadrant evaluation matching the screen display
-    if x <= 125:
-        zone = "Upper Left (Btn 3)" if y <= 61 else "Lower Left (Btn 2)"
+    # Clean quadrant evaluation (Y = Width/Horizontal, X = Height/Vertical)
+    if y <= 125:
+        zone = "Up Left (Btn 3)" if x <= 61 else "Low Left (Btn 2)"
     else:
-        zone = "Upper Right (Btn 1)" if y <= 61 else "Lower Right (Reserved)"
+        zone = "Up Right (Btn 1)" if x <= 61 else "Low Right (Reserved)"
 
-    return x, y, raw_x, raw_y, zone
+    return y, x, raw_x, raw_y, zone
 
 
 def main():
-    print("=================================================")
+    print("=====================================================")
     print("Starting Touch Zone Test Code...")
-    print("=================================================")
+    print(f"Target Rotation: {DISPLAY_ROTATION}°")
+    print("Axis Mapping: Y = Width (0..249), X = Height (0..121)")
+    print("=====================================================")
 
     print("Initializing E-Ink Display...")
     epd_disp, epd_draw, font_small_default, epd_image = init_eink_display()
     print("E-Ink Initialized.")
 
     try:
-        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 13)
-        font_medium = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
+        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 11)
     except IOError:
         font_small = font_small_default
-        font_medium = font_small_default
 
-    # Initial screen draw (Full Update)
-    draw_test_grid(epd_draw, font_small, font_medium)
+    # Initial screen draw
+    draw_test_grid(epd_draw, font_small)
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=False)
     flush_touch_inputs()
 
-    print("\nTouch screen quadrants to test mapping. ")
+    print("\nTouch screen quadrants to test mapping.")
 
-    last_touch_time = 0
+    try:
+        while True:
+            touch_result = process_touch_data(rotation=DISPLAY_ROTATION)
 
-    while True:
-        touch_result = process_touch_data()
+            if touch_result:
+                y, x, raw_x, raw_y, zone = touch_result
+                status_msg = f"Raw({raw_x},{raw_y}) -> Disp(Y={y},X={x}) | {zone}"
 
-        if touch_result:
-            x, y, raw_x, raw_y, zone = touch_result
-            status_msg = f"Raw({raw_x},{raw_y}) -> Disp({x},{y}) | {zone}"
+                print(f"\n[TOUCH DETECTED] {status_msg}")
 
-            print(f"\n[TOUCH DETECTED] {status_msg}")
+                # Redraw test grid with updated info
+                draw_test_grid(epd_draw, font_small, last_touch_info=f"Disp(Y={y},X={x}) -> {zone}")
 
-            # Draw visual feedback box around touch area on E-Ink
-            draw_test_grid(epd_draw, font_small, font_medium, last_touch_info=f"Disp({x},{y}) -> {zone}")
+                # Draw crosshair indicator at touch location: (horizontal_y, vertical_x)
+                epd_draw.rectangle((y - 3, x - 3, y + 3, x + 3), fill=0)
 
-            # Draw a small 10x10 crosshair box at touch coordinates
-            # TODO verify and debug this
-            epd_draw.rectangle((x - 4, y - 4, x + 4, y + 4), fill=0)
+                refresh_eink_display(epd_disp, epd_draw, epd_image, partial=True)
+                flush_touch_inputs()
 
-            refresh_eink_display(epd_disp, epd_draw, epd_image, partial=True)
-            flush_touch_inputs()
+                time.sleep(0.2)  # Debounce delay
 
-            time.sleep(0.2)  # Short pause to prevent over-triggering
+            time.sleep(0.05)
 
-        time.sleep(0.05)
+    finally:
+        print("\nCleaning up Eink display...")
+        cleanup_eink(epd_disp)
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\nTest exited by user (Ctrl-C).")
+        print("\nTest exited by user (ctrl-c).")
     except Exception as e:
         print(f"\nTest crashed with error: {e}")
