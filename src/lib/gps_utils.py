@@ -68,17 +68,17 @@ def inject_system_time_to_gps_if_needed(uart_connection: serial.Serial):
     Injects system time ($PMTK740) into MT3339 GPS and verifies PMTK001 acknowledgement.
     """
     if gps_has_valid_time(uart_connection):
-        print(" * GPS RTC already has valid time — Skipping time injection.")
+        print(" * GPS RTC has valid time.")
         return True
 
     # Check if Pi system time is sane before using it
     now = time.gmtime()
     if now.tm_year < 2026:
-        print(" * Pi system time is un-synced (pre-2026) — Skipping GPS injection.")
+        print(" * Pi system time is invalid (pre-2026) — Skipping Pi system time injection.")
         return False
 
     # Inject time if GPS has no time, but Pi has good time
-    print(" * GPS missing valid time. Injecting Pi UTC time...")
+    print(" * GPS missing valid time. Injecting Pi system time...")
     try:
         payload = f"PMTK740,{now.tm_year:04d},{now.tm_mon:02d},{now.tm_mday:02d},{now.tm_hour:02d},{now.tm_min:02d},{now.tm_sec:02d}"
         checksum = functools.reduce(operator.xor, (ord(c) for c in payload))
