@@ -202,7 +202,7 @@ class GT911Touch:
         """Delegates transformation to map_touch_to_display."""
         return map_touch_to_display(pt.x, pt.y, rotation=rotation)
 
-    def get_single_press(self, cooldown_sec: float = 0.8, rotation: int = 90) -> list[TouchPoint]:
+    def get_single_press(self, cooldown_sec: float = 0.3, rotation: int = 90) -> list[TouchPoint]:
         raw_points = self.read_touch_points()
         now = time.time()
 
@@ -273,18 +273,20 @@ def get_rotated_buffer(img):
 
 
 def refresh_eink_display(disp, draw, img, partial=True):
-    global partial_refresh_count
+    global partial_refresh_count, epd_disp
+
     if not partial or partial_refresh_count >= MAX_PARTIAL_REFRESHES:
         epd_disp.init(epd_disp.FULL_UPDATE)
-        epd_disp.displayPartBaseImage(get_rotated_buffer(epd_image))
+        epd_disp.displayPartBaseImage(get_rotated_buffer(img))
         epd_disp.init(epd_disp.PART_UPDATE)
         partial_refresh_count = 0
     else:
-        epd_disp.displayPartial(get_rotated_buffer(epd_image))
+        # Fast partial update pass (~300ms)
+        epd_disp.displayPartial(get_rotated_buffer(img))
         partial_refresh_count += 1
 
 
-def check_touch_inputs(cooldown_sec: float = 0.8, rotation: int = 90) -> list[TouchPoint]:
+def check_touch_inputs(cooldown_sec: float = 0.3, rotation: int = 90) -> list[TouchPoint]:
     global _gt911_driver
     if _gt911_driver is None:
         reset_gt911()
