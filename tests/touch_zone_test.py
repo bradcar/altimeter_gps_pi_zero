@@ -7,10 +7,10 @@ Origin (0,0): Top-Left corner of the screen.
 Y: Display Width (SCREEN_WIDTH): 250 pixels, 0 to 249 (Left → Right)
 X: Display Height (SCREEN_HEIGHT): 122 pixels, 0 to 121 (Top → Bottom)
 
-Display/Toudh Zones:
-    "Upper Left (Btn 3)"      y <= 125, x <= 61
+Display/Touch Zones:
+    "Upper Left (Btn 1)"      y <= 125, x <= 61
     "Lower Left (Btn 2)"      y <= 125, x >  61
-    "Upper Right (Btn 1)"     y >  125, x <= 61
+    "Upper Right (Btn 3)"     y >  125, x <= 61
     "Lower Right (Reserved)"  y >  125, x >  61
 """
 
@@ -24,7 +24,7 @@ try:
         refresh_eink_display,
         check_touch_inputs,
         flush_touch_inputs,
-        transform_touch_point,
+        align_touch_point_to_display,
         cleanup_eink,
     )
 except ImportError:
@@ -33,7 +33,7 @@ except ImportError:
         refresh_eink_display,
         check_touch_inputs,
         flush_touch_inputs,
-        transform_touch_point,
+        align_touch_point_to_display,
         cleanup_eink,
     )
 
@@ -55,10 +55,10 @@ def draw_test_grid(epd_draw, font_small, last_touch_info="Touch anywhere to test
 
     # Draw quadrant dividing lines
     epd_draw.line((125, 0, 125, 122), fill=0, width=1)  # Vertical split line at Y = 125
-    epd_draw.line((0, 61, 250, 61), fill=0, width=1)  # Horizontal split line at X = 61
+    epd_draw.line((0, 61, 250, 61), fill=0, width=1)    # Horizontal split line at X = 61
 
     # Label Top-Left: Mode Toggle (Button 3)
-    epd_draw.text((10, 10), "MODE (Btn 3)", font=font_small, fill=0)
+    epd_draw.text((10, 10), "MODE (Btn 1)", font=font_small, fill=0)
     epd_draw.text((10, 28), "Upper Left", font=font_small, fill=0)
 
     # Label Bottom-Left: Calibrate / Adjust (Button 2)
@@ -66,7 +66,7 @@ def draw_test_grid(epd_draw, font_small, last_touch_info="Touch anywhere to test
     epd_draw.text((10, 89), "Lower Left", font=font_small, fill=0)
 
     # Label Top-Right: Unit Toggle (Button 1)
-    epd_draw.text((135, 10), "UNIT (Btn 1)", font=font_small, fill=0)
+    epd_draw.text((135, 10), "UNIT (Btn 3)", font=font_small, fill=0)
     epd_draw.text((135, 28), "Upper Right", font=font_small, fill=0)
 
     # Label Bottom-Right: Reserved
@@ -90,19 +90,14 @@ def process_touch_data(rotation: int = DISPLAY_ROTATION):
     touch = touch_data[0]
     raw_x, raw_y = touch.x, touch.y
 
-    # transform_touch_point returns (width_coord, height_coord) from hardware.
-    # Map them to Y (Horizontal Width) and X (Vertical Height):
-    disp_y, disp_x = transform_touch_point(touch, rotation=rotation)
-
-    # Clamp bounds safety net
-    y = max(0, min(SCREEN_WIDTH - 1, disp_y))  # Y = Horizontal (0..249)
-    x = max(0, min(SCREEN_HEIGHT - 1, disp_x))  # X = Vertical   (0..121)
+    # transform_touch_point returns (disp_y, disp_x) where disp_y = Horizontal, disp_x = Vertical
+    y, x = align_touch_point_to_display(touch, rotation=rotation)
 
     # Clean quadrant evaluation (Y = Width/Horizontal, X = Height/Vertical)
     if y <= 125:
-        zone = "Up Left (Btn 3)" if x <= 61 else "Low Left (Btn 2)"
+        zone = "Up Left (Btn 1)" if x <= 61 else "Low Left (Btn 2)"
     else:
-        zone = "Up Right (Btn 1)" if x <= 61 else "Low Right (Reserved)"
+        zone = "Up Right (Btn 3)" if x <= 61 else "Low Right (Reserved)"
 
     return y, x, raw_x, raw_y, zone
 
@@ -118,10 +113,7 @@ def main():
     epd_disp, epd_draw, font_small_default, epd_image = init_eink_display()
     print("E-Ink Initialized.")
 
-    try:
-        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 11)
-    except IOError:
-        font_small = font_small_default
+    font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 11)
 
     # Initial screen draw
     draw_test_grid(epd_draw, font_small)
@@ -152,7 +144,6 @@ def main():
                 time.sleep(0.2)  # Debounce delay
 
             time.sleep(0.05)
-
 
     finally:
         print("\nCleaning up display hardware...")

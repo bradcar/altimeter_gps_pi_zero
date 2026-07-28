@@ -4,8 +4,9 @@ Utils for Waveshare 2.13" E-Paper Touch Hat (epd2in13_V4)
 Driver & canvas helpers
 
 Features
- * Display 250px x 122px
- * GT911 Touch Controller
+    * Display 250px x 122px
+        - Pillow: Y = Width/Horizontal, X = Height/Vertical
+    * GT911 Touch Controller
 
 Variable Name	Role in Demo Code	Pixel Range in Code	Physical Orientation
 GT_Dev.X[0]	Short Axis (Height / Vertical)	0 to 121 (Clamped check: < 121)	Native Width
@@ -50,13 +51,13 @@ GT911_ADDR_SECONDARY = 0x5D
 GT911_READ_COORD_ADDR = 0x814E
 GT911_PRODUCT_ID_ADDR = 0x8140
 
-# Hardware Native Base Dimensions (Portrait)
+# Hardware Native Base Dimensions (0° Portrait)
 TOUCH_NATIVE_W = 122  # Short Axis (x: 0 .. 121)
 TOUCH_NATIVE_H = 250  # Long Axis  (y: 0 .. 249)
 
 # Virtual Canvas / Target Screen Defaults
-VIRTUAL_WIDTH = 250
-VIRTUAL_HEIGHT = 122
+VIRTUAL_WIDTH = 250   # Horizontal / Y-axis
+VIRTUAL_HEIGHT = 122  # Vertical / X-axis
 FILL_WHITE = 255
 
 DEBUG_TOUCH = True  # Set to True to print touch events to stdout
@@ -70,22 +71,46 @@ class TouchPoint:
     size: int = 0
 
 
+def map_touch_to_display(raw_x: int, raw_y: int, rotation: int = 90) -> tuple[int, int]:
+    """
+    Transforms raw GT911 touch coordinates into logical display coordinates.
+    Returns (disp_y, disp_x) where:
+      - disp_y = Horizontal / Width Axis (0 .. 249)
+      - disp_x = Vertical / Height Axis  (0 .. 121)
+    """
+    # 1. Clamp raw sensor ranges to hardware limits
+    clamped_x = max(0, min(TOUCH_NATIVE_W - 1, raw_x))  # 0 .. 121
+    clamped_y = max(0, min(TOUCH_NATIVE_H - 1, raw_y))  # 0 .. 249
+
+    # 2. Map coordinates based on target rotation
+    if rotation == 90:
+        # Standard Landscape (Y = Horizontal 0..249, X = Vertical 0..121)
+        disp_y = clamped_y
+        disp_x = (TOUCH_NATIVE_W - 1) - clamped_x  # Invert short axis to match Pillow canvas
+    elif rotation == 270:
+        # Flipped Landscape
+        disp_y = (TOUCH_NATIVE_H - 1) - clamped_y
+        disp_x = clamped_x
+    elif rotation == 180:
+        # Flipped Portrait
+        disp_y = (TOUCH_NATIVE_W - 1) - clamped_x
+        disp_x = (TOUCH_NATIVE_H - 1) - clamped_y
+    else:
+        # 0° Native Portrait
+        disp_y = clamped_x
+        disp_x = clamped_y
+
+    return disp_y, disp_x
+
+
 def reset_gt911():
-    """
-    Forces hardware reset pulse on GT911 to set I2C address 0x14.
-    Reuses Waveshare's epdconfig digital_write interface.
-    """
+    """Forces hardware reset pulse on GT911 to set I2C address 0x14."""
     try:
-        # Pulse RST (GPIO 22) low using epdconfig's active backend
         epdconfig.digital_write(RST_PIN, 0)
         time.sleep(0.02)
-
-        # Drive RST (GPIO 22) high -> configures GT911 address to 0x14
         epdconfig.digital_write(RST_PIN, 1)
         time.sleep(0.05)
-
-        print(" * GT911 Eink Touch reset at I2C 0x14 ")
-
+        print(" * GT911 Eink Touch reset at I2C 0x14")
     except Exception as e:
         print(f"* GT911 Eink touch reset error: {e}")
 
@@ -98,7 +123,6 @@ class GT911Touch:
         self.address = GT911_ADDR_PRIMARY
         self.bus = None
 
-        # State tracking for debounce & edge detection
         self.finger_down = False
         self.last_trigger_time = 0.0
 
@@ -126,13 +150,6 @@ class GT911Touch:
             self.bus = None
 
     def read_touch_points(self) -> list[TouchPoint]:
-        """
-        Low-level register poll for RAW GT911 touch coordinates.
-
-        NATIVE HARDWARE ORIENTATION (0° Portrait):
-            - Native Width  (Short Axis): 122 px  (x: 0 .. 121)
-            - Native Height (Long Axis):  250 px  (y: 0 .. 249)
-        """
         if self.bus is None:
             return []
 
@@ -148,11 +165,9 @@ class GT911Touch:
             buffer_ready = (point_status & 0x80) != 0
             touch_count = point_status & 0x0F
 
-            if not buffer_ready:
-                return []
-
-            if touch_count == 0:
-                self._clear_status_register()
+            if not buffer_ready or touch_count == 0:
+                if buffer_ready:
+                    self._clear_status_register()
                 return []
 
             bytes_to_read = touch_count * 8
@@ -167,12 +182,10 @@ class GT911Touch:
                 offset = i * 8
                 p_id = data[offset]
 
-                # Raw hardware coordinates directly from GT911 registers:
-                raw_x = data[offset + 1] | (data[offset + 2] << 8)  # Short Axis: 0 .. 121
-                raw_y = data[offset + 3] | (data[offset + 4] << 8)  # Long Axis:  0 .. 249
+                raw_x = data[offset + 1] | (data[offset + 2] << 8)
+                raw_y = data[offset + 3] | (data[offset + 4] << 8)
                 p_size = data[offset + 5] | (data[offset + 6] << 8)
 
-                # Clamp strictly to hardware native limits before returning
                 native_x = max(0, min(TOUCH_NATIVE_W - 1, raw_x))
                 native_y = max(0, min(TOUCH_NATIVE_H - 1, raw_y))
 
@@ -185,71 +198,34 @@ class GT911Touch:
         except Exception:
             return []
 
-    def transform_touch_point(self, pt: TouchPoint, rotation: int = 0) -> tuple[int, int]:
-        """
-        Transforms raw TouchPoint (122x250 native) to target display orientation.
+    def transform_touch_point(self, pt: TouchPoint, rotation: int = 90) -> tuple[int, int]:
+        """Delegates transformation to map_touch_to_display."""
+        return map_touch_to_display(pt.x, pt.y, rotation=rotation)
 
-        TRANSFORMATION REFERENCE GUIDE:
-            * 0° Native Portrait (122x250):
-                x_out = pt.x                              (0 .. 121)
-                y_out = pt.y                              (0 .. 249)
-
-            * 90° Landscape (250x122):
-                x_out = pt.y                              (0 .. 249)
-                y_out = (TOUCH_NATIVE_W - 1) - pt.x       (0 .. 121)
-
-            * 180° Inverted Portrait (122x250):
-                x_out = (TOUCH_NATIVE_W - 1) - pt.x       (0 .. 121)
-                y_out = (TOUCH_NATIVE_H - 1) - pt.y       (0 .. 249)
-
-            * 270° Inverted Landscape (250x122):
-                x_out = (TOUCH_NATIVE_H - 1) - pt.y       (0 .. 249)
-                y_out = pt.x                              (0 .. 121)
-        """
-        if rotation == 90:
-            return pt.y, (TOUCH_NATIVE_W - 1) - pt.x
-        elif rotation == 180:
-            return (TOUCH_NATIVE_W - 1) - pt.x, (TOUCH_NATIVE_H - 1) - pt.y
-        elif rotation == 270:
-            return (TOUCH_NATIVE_H - 1) - pt.y, pt.x
-        else:
-            # 0° Native Portrait
-            return pt.x, pt.y
-
-    def get_single_press(self, cooldown_sec: float = 0.8, rotation: int = 0) -> list[TouchPoint]:
-        """
-        Returns touch points ONLY on the initial touch event (finger-down transition).
-        Ignores continuous holding and enforces a cooldown period.
-        """
+    def get_single_press(self, cooldown_sec: float = 0.8, rotation: int = 90) -> list[TouchPoint]:
         raw_points = self.read_touch_points()
         now = time.time()
 
         if raw_points:
-            # Finger is currently on the screen
             if not self.finger_down:
                 self.finger_down = True
-                # Only register button press if cooldown period has elapsed
                 if (now - self.last_trigger_time) >= cooldown_sec:
                     self.last_trigger_time = now
                     if DEBUG_TOUCH:
                         pt = raw_points[0]
-                        tx, ty = self.transform_touch_point(pt, rotation=rotation)
-                        print(f"[GT911 TOUCH] Raw({pt.x}, {pt.y}) -> Disp{rotation}°({tx}, {ty})")
+                        ty, tx = self.transform_touch_point(pt, rotation=rotation)
+                        print(f"[GT911 TOUCH] Raw({pt.x}, {pt.y}) -> Disp{rotation}°(Y={ty}, X={tx})")
                     return raw_points
-            # Finger is still held down -> ignore repeating events
             return []
         else:
-            # Finger lifted -> reset state
             self.finger_down = False
             return []
 
     def flush_buffer(self):
-        """Flushes any accumulated/stale touches in the GT911 hardware register."""
         self._clear_status_register()
         self.finger_down = False
 
     def _clear_status_register(self):
-        """Clears 0x814E status register by writing 0x00."""
         try:
             reg_msb = (GT911_READ_COORD_ADDR >> 8) & 0xFF
             reg_lsb = GT911_READ_COORD_ADDR & 0xFF
@@ -272,18 +248,13 @@ _gt911_driver = None
 def init_eink_display():
     global epd_disp, epd_image, epd_draw, _gt911_driver
 
-    # Initialize E-Paper Display before touch
     epd_disp = epd2in13_V4.EPD()
     epd_disp.init(epd_disp.FULL_UPDATE)
     epd_disp.Clear(0xFF)
 
-    # Reset GT911 Touch Chip
     reset_gt911()
-
-    # Instantiate GT911 Driver
     _gt911_driver = GT911Touch(bus_num=1)
 
-    # Canvas setup
     epd_image = Image.new('1', (VIRTUAL_WIDTH, VIRTUAL_HEIGHT), FILL_WHITE)
     epd_draw = ImageDraw.Draw(epd_image)
 
@@ -313,8 +284,7 @@ def refresh_eink_display(disp, draw, img, partial=True):
         partial_refresh_count += 1
 
 
-def check_touch_inputs(cooldown_sec: float = 0.8, rotation: int = 0) -> list[TouchPoint]:
-    """Utility wrapper polled continuously from main loop."""
+def check_touch_inputs(cooldown_sec: float = 0.8, rotation: int = 90) -> list[TouchPoint]:
     global _gt911_driver
     if _gt911_driver is None:
         reset_gt911()
@@ -323,34 +293,22 @@ def check_touch_inputs(cooldown_sec: float = 0.8, rotation: int = 0) -> list[Tou
     return _gt911_driver.get_single_press(cooldown_sec=cooldown_sec, rotation=rotation)
 
 
-def transform_touch_point(pt: TouchPoint, rotation: int = 0) -> tuple[int, int]:
-    """Module-level wrapper exposing GT911Touch.transform_touch_point for standalone imports."""
-    global _gt911_driver
-    if _gt911_driver is None:
-        _gt911_driver = GT911Touch()
-    return _gt911_driver.transform_touch_point(pt, rotation=rotation)
+def align_touch_point_to_display(pt: TouchPoint, rotation: int = 90) -> tuple[int, int]:
+    """Module-level wrapper exposing coordinate translation."""
+    return map_touch_to_display(pt.x, pt.y, rotation=rotation)
 
 
 def flush_touch_inputs():
-    """Flushes stale touch data from the GT911 buffer."""
     global _gt911_driver
     if _gt911_driver is not None:
         _gt911_driver.flush_buffer()
 
 
 def cleanup_eink(display=None, clear=False):
-    """
-    Puts the e-Paper display controller into deep sleep.
-
-    :param display: EPD display instance (falls back to global epd_disp if None).
-    :param clear: If True, flashes screen white before sleeping. If False (default),
-                  leaves the last rendered image static on the display.
-    """
     global epd_disp
     target_epd = display if display is not None else epd_disp
     if target_epd:
         try:
-            # If clear is requested, initialize full update and flush white
             if clear:
                 if hasattr(target_epd, 'FULL_UPDATE'):
                     target_epd.init(target_epd.FULL_UPDATE)
@@ -358,10 +316,8 @@ def cleanup_eink(display=None, clear=False):
                     target_epd.init()
                 target_epd.Clear(0xFF)
 
-            # Put driver IC into ultra-low-power sleep mode
             target_epd.sleep()
 
-            # Clean up SPI/GPIO handles if supported
             if hasattr(target_epd, 'Dev_exit'):
                 target_epd.Dev_exit()
 
