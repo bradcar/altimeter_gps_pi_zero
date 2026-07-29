@@ -1,12 +1,15 @@
 # button_rotary_utils.py
 """
 GPIO buttons and rotary encoder setup, debounce, state, and button flags.
+
+Currently, 3 Physical buttons defined and rotary encoder with switch
+Touch panel can set state for 4 buttons
 """
 
 import time
 from gpiozero import Button, RotaryEncoder
 
-# --- Module State ---
+# Module State
 _button_1 = None
 _button_2 = None
 _button_3 = None
@@ -27,7 +30,7 @@ def _ticks_ms():
     return int(time.monotonic() * 1000)
 
 
-# --- Internal Handlers ---
+# Internal Handlers
 def _button_1_handler():
     global _button_1_pushed, _debounce_1_time
     if (_ticks_ms() - _debounce_1_time) > 250:
@@ -74,7 +77,7 @@ def init_controls(
     _button_3.when_pressed = _button_3_handler
 
 
-# Event Setters (Used by Touch Handlers)
+# Event Setters used by Touch Handlers
 def trigger_button_1():
     global _button_1_pushed
     _button_1_pushed = True
