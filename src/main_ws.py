@@ -377,7 +377,7 @@ def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, i
         epd_draw.text((250 - clock_width, 3), clock_string, font=font_small, fill=0)
     else:
         epd_draw.text((3, 3), "Altimeter", font=font_small, fill=0)
-        clock_string = "*SLEEP* @ " + time.strftime("%I:%M %p", time.localtime()).lower()
+        clock_string = "*SLEEP*  @ " + time.strftime("%I:%M %p", time.localtime()).lower()
         clock_width = font_small.getlength(clock_string)
         epd_draw.text((250 - clock_width, 3), clock_string, font=font_small, fill=0)
 
@@ -426,8 +426,8 @@ def display_gps_details(gps, partial=False):
         # Show header with number of Satellites & quality
         sats = gps.satellites if gps.satellites is not None else 0
         qual = gps.fix_quality if gps.fix_quality is not None else 0
-        if sats > 0 and qual > 0:
-            epd_draw.text((3, 2), f"GPS ({sats} sats, q={qual})", font=font_small, fill=0)
+        if gps.has_fix:
+            epd_draw.text((3, 2), f"GPS    ({sats} sats, q={qual})", font=font_small, fill=0)
         else:
             epd_draw.text((3, 2), f"GPS     ** NO FIX **", font=font_small, fill=0)
 
@@ -482,34 +482,47 @@ def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, is_metric, partial
     press_num_width = font_biggest.getlength(press_string)
     press_metric_string = f"hpa"
 
-    epd_draw.text((2, 6), f"Alt", font=font_small, fill=0)
-    epd_draw.text((35 + long_alt_num_width - alt_num_width, 0), alt_string, font=font_biggest, fill=0)
+    epd_draw.text((2, 19), f"Alt", font=font_small, fill=0)
+    epd_draw.text((36 + long_alt_num_width - alt_num_width, 0), alt_string, font=font_biggest, fill=0)
 
     if is_metric:
         epd_draw.text((28 + long_alt_num_width, 25), alt_metric_string, font=font_medium, fill=0)
     else:
         epd_draw.text((28 + 2 + long_alt_num_width, 0), "'", font=font_biggest, fill=0)
 
-    epd_draw.text((2, 48), f"hPa", font=font_small, fill=0)
-    epd_draw.text((35, 41), press_string, font=font_biggest, fill=0)
+    epd_draw.text((2, 60), f"hPa", font=font_small, fill=0)
+    epd_draw.text((36, 41), press_string, font=font_biggest, fill=0)
     # epd_draw.text((35 + press_num_width + 3, 41 + 9), press_metric_string, font=font_medium, fill=0)
 
-    epd_draw.text((2, 88), f"GPS", font=font_small, fill=0)
     if gps is not None:
-        lat_string = get_lat_string(gps)
-        lon_string = get_lon_string(gps)
-        lat_str_width = font_medium.getlength(lat_string)
-        lon_str_width = font_medium.getlength(lon_string)
-        lon_lat_diff = (lon_str_width - lat_str_width)
-        epd_draw.text((60 + lon_lat_diff - 5, 87), lat_string, font=font_medium, fill=0)
-        epd_draw.text((60, 105), lon_string, font=font_medium, fill=0)
-    else:
-        epd_draw.text((60, 88), "Acquiring GPS", font=font_medium, fill=0)
+        if gps.latitude is not None and gps.longitude is not None:
+            if gps.has_fix:
+                epd_draw.text((2, 97), f"GPS", font=font_small, fill=0)
+            else:
+                epd_draw.text((2, 88), f"Last", font=font_small, fill=0)
+                epd_draw.text((2, 102), f"Fix", font=font_small, fill=0)
 
-    # Flash IAQ warning (black banner with white text in the top right)
+            lat_string = get_lat_string(gps)
+            lon_string = get_lon_string(gps)
+            lat_str_width = font_medium.getlength(lat_string)
+            lon_str_width = font_medium.getlength(lon_string)
+            lon_lat_diff = (lon_str_width - lat_str_width)
+            epd_draw.text((64 + lon_lat_diff - 5, 86), lat_string, font=font_medium, fill=0)
+            epd_draw.text((64, 104), lon_string, font=font_medium, fill=0)
+        else:
+            epd_draw.text((55, 95), "Acquiring GPS", font=font_medium, fill=0)
+    else:
+        epd_draw.text((55, 95), "NO GPS Sensor", font=font_medium, fill=0)
+
+    # Dispaly IAQ warning box
     if iaq and iaq > 150.0:
-        epd_draw.rectangle((180, 2, 250, 20), fill=0)
-        epd_draw.text((192, 4), "IAQ!", font=font_small, fill=255)
+        # draw at bottom right
+        epd_draw.rectangle((206, 91, 250, 122), fill=0)
+        epd_draw.text((208, 90), "warn", font=font_small, fill=255)
+        epd_draw.text((210, 104), "IAQ !", font=font_small, fill=255)
+        # # draw at top right
+        # epd_draw.rectangle((211, 0, 250, 18), fill=0)
+        # epd_draw.text((215, 2), "IAQ!", font=font_small, fill=255)
 
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
     flush_touch_inputs()
