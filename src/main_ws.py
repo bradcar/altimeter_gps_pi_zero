@@ -1,5 +1,7 @@
-# altimeter_gps_ws.py
+#!/usr/bin/env python3
 """
+altimeter_gps_ws.py
+
 Raspberry Pi Zero: Altimeter = Elevation & sea level pressure adjust
 
 Sensors used
@@ -43,6 +45,7 @@ from PIL import ImageFont
 from gpiozero import Button, RotaryEncoder
 
 from barometer_utils import calc_sea_level_pressure, bme_hpa_correction, calc_altitude
+# from button_rotary_utils import process_inputs, check_rotary_switch_pressed
 from gps_utils import initialize_gps
 from lib.bme680 import BME680_I2C
 from lib.bme680_utils import iaq_quality_to_string, calculate_iaq
@@ -90,13 +93,12 @@ def uname():
 # Button 3: cm/in toggle (GPIO 6)
 # Button 4: <no physical pin, touch only> Oregon reference
 
-
 button_1 = Button(6, pull_up=True, bounce_time=0.05)
 button_2 = Button(5, pull_up=True, bounce_time=0.05)
 button_3 = Button(16, pull_up=True, bounce_time=0.05)
 
-# Rotary encoder: a = clk, b = DT
-encoder = RotaryEncoder(a=21, b=13, bounce_time=0.005)
+# Rotary encoder: a = clk, b = DT, max_steps is be default +/-16 steps, 0 means unlimited
+encoder = RotaryEncoder(a=21, b=13, max_steps=0, bounce_time=0.005)
 rotary_switch = Button(19, pull_up=True, bounce_time=0.05)
 
 button_1_pushed = False
@@ -114,11 +116,13 @@ print("E-ink Initialization Done.")
 try:
     font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
     font_medium = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
-    font_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 46)
+    font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
+    font_biggest = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 46)
 except IOError:
     font_small = ImageFont.load_default()
     font_medium = ImageFont.load_default()
-    font_big = ImageFont.load_default()
+    font_large = ImageFont.load_default()
+    font_biggest = ImageFont.load_default()
 
 
 # Mimic MicroPython millisecond timers
@@ -254,11 +258,13 @@ def display_altitude_reference(is_metric, partial=False):
 def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pressure_hpa):
     new_alt = altitude_m
     new_slp = sea_level_pressure_hpa
-    rotary_multiplier = 1
+    multiplier_small_step = 1.0
+    multiplier_big_step = 100.0
+    rotary_multiplier = multiplier_small_step
     rotary_old = encoder.steps
     partial_refresh_count = 0  # method local count
 
-    print(f"Adjustment start: alt = {new_alt:.1f} m")
+    print(f"Adjustment start: alt = {new_alt:.3f} m")
     need_redraw = True
 
     while not button2():
@@ -272,7 +278,7 @@ def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pres
             need_redraw = True
 
         if rotary_switch.is_pressed:
-            rotary_multiplier = 100 if rotary_multiplier == 1 else 1
+            rotary_multiplier = multiplier_big_step  if rotary_multiplier == multiplier_small_step else multiplier_small_step
             print(f"Rotary multiplier: {rotary_multiplier}")
             while rotary_switch.is_pressed:
                 time.sleep(0.01)
@@ -315,33 +321,33 @@ def display_updated_altitude_calibration(alt, press, is_metric, partial=False):
     """
     Renders current calibration values to E-Ink display.
     """
-    epd_draw.rectangle((0, 0, 250, 122), fill=0)
-    epd_draw.text((10, 5), "Setting Altitude...", font=font_small, fill=255)
-    epd_draw.line((10, 23, 250, 23), fill=255, width=1)
+    epd_draw.rectangle((0, 0, 250, 122), fill=255)
+    epd_draw.rectangle((0, 0, 250, 25), fill=0)
+    epd_draw.text((34, 2), "Setting Altitude...", font=font_medium, fill=255)
 
     # New Altitude Data
-    epd_draw.text((10, 32), "New", font=font_small, fill=255)
-    epd_draw.text((10, 46), "Alt", font=font_small, fill=255)
+    epd_draw.text((2, 33), "SET", font=font_medium, fill=0)
+    epd_draw.text((2, 49), "Alt", font=font_medium, fill=0)
 
     # Formatted to 0 decimals so text fits  on screen
     # TODO Adjust this for more info on display
     convert, unit = metric_format(is_metric)
     alt_val = f"{(alt * convert):.0f}{unit}"
-    epd_draw.text((60, 28), alt_val, font=font_big, fill=255)
+    epd_draw.text((60, 28), alt_val, font=font_biggest, fill=0)
 
     # Sea Level Pressure Data
-    epd_draw.text((10, 78), "Sea", font=font_small, fill=255)
-    epd_draw.text((10, 92), "hPa", font=font_small, fill=255)
+    epd_draw.text((2, 80), "Sea", font=font_medium, fill=0)
+    epd_draw.text((2, 96), "hPa", font=font_medium, fill=0)
 
-    press_val = f"{press:.1f}"
-    epd_draw.text((60, 74), press_val, font=font_big, fill=255)
+    press_val = f"{press:.2f}"
+    epd_draw.text((60, 74), press_val, font=font_large, fill=0)
 
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
     flush_touch_inputs()
 
 
 def print_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric):
-    print("=" * 40)  # Print a separator line.
+    print("=" * 40)
     clock_string = time.strftime("%I:%M %p", time.localtime()).lower()
 
     if is_metric:
@@ -365,17 +371,17 @@ def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, i
                               partial=False):
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
     if not is_final:
-        epd_draw.text((3, 5), "Altimeter Details", font=font_small, fill=0)
+        epd_draw.text((3, 3), "Altimeter Details", font=font_small, fill=0)
         clock_string = time.strftime("%I:%M %p", time.localtime()).lower()
         clock_width = font_small.getlength(clock_string)
-        epd_draw.text((250 - clock_width, 5), clock_string, font=font_small, fill=0)
+        epd_draw.text((250 - clock_width, 3), clock_string, font=font_small, fill=0)
     else:
-        epd_draw.text((3, 5), "Altimeter", font=font_small, fill=0)
-        clock_string = "** SLEEP @ " + time.strftime("%I:%M %p", time.localtime()).lower()
+        epd_draw.text((3, 3), "Altimeter", font=font_small, fill=0)
+        clock_string = "*SLEEP* @ " + time.strftime("%I:%M %p", time.localtime()).lower()
         clock_width = font_small.getlength(clock_string)
-        epd_draw.text((250 - clock_width, 5), clock_string, font=font_small, fill=0)
+        epd_draw.text((250 - clock_width, 3), clock_string, font=font_small, fill=0)
 
-    epd_draw.line((5, 21, 250, 21), fill=0, width=1)
+    epd_draw.line((0, 21, 250, 21), fill=0, width=1)
 
     if is_metric:
         barometer_string = f"{pressure_hpa:.2f} hPa"
@@ -396,10 +402,10 @@ def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, i
     ]
 
     font_list = font_medium
-    start_y = 27
+    start_y = 25
     line_height = 18
     if is_metric:
-        left_margin_x = 1
+        left_margin_x = 3
         right_align_x = 220
     else:
         left_margin_x = 16
@@ -421,13 +427,13 @@ def display_gps_details(gps, partial=False):
         sats = gps.satellites if gps.satellites is not None else 0
         qual = gps.fix_quality if gps.fix_quality is not None else 0
         if sats > 0 and qual > 0:
-            epd_draw.text((3, 5), f"GPS ({sats} sats, q={qual})", font=font_small, fill=0)
+            epd_draw.text((3, 2), f"GPS ({sats} sats, q={qual})", font=font_small, fill=0)
         else:
-            epd_draw.text((3, 5), f"GPS   ** NO FIX **", font=font_small, fill=0)
+            epd_draw.text((3, 2), f"GPS     ** NO FIX **", font=font_small, fill=0)
 
         clock_string = time.strftime("%I:%M %p", time.localtime()).lower()
         clock_width = font_small.getlength(clock_string)
-        epd_draw.text((250 - clock_width, 5), clock_string, font=font_small, fill=0)
+        epd_draw.text((250 - clock_width, 2), clock_string, font=font_small, fill=0)
         epd_draw.line((5, 21, 250, 21), fill=0, width=1)
 
         # List of GPS metrics
@@ -444,9 +450,9 @@ def display_gps_details(gps, partial=False):
         ]
 
         font_list = font_medium
-        start_y = 27
+        start_y = 25
         line_height = 18
-        left_margin_x = 1
+        left_margin_x = 2
         right_align_x = 210
         display_list_names_values(sensor_data, font_list, line_height, start_y, left_margin_x, right_align_x)
         refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
@@ -465,30 +471,30 @@ def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, is_metric, partial
     convert, unit = metric_format(is_metric)
     if is_metric:
         alt_string = f"{altitude_m * convert:.1f}"
-        long_alt_num_width = font_big.getlength("9999.9")
+        long_alt_num_width = font_biggest.getlength("9999.9")
     else:
         alt_string = f"{altitude_m * convert:.1f}"
-        long_alt_num_width = font_big.getlength("99999.9")
+        long_alt_num_width = font_biggest.getlength("99999.9")
 
-    alt_num_width = font_big.getlength(alt_string)
+    alt_num_width = font_biggest.getlength(alt_string)
     alt_metric_string = f"{unit}"
     press_string = f"{pressure_hpa:.2f}"
-    press_num_width = font_big.getlength(press_string)
+    press_num_width = font_biggest.getlength(press_string)
     press_metric_string = f"hpa"
 
-    epd_draw.text((0, 6), f"Alt", font=font_small, fill=0)
-    epd_draw.text((35 + long_alt_num_width - alt_num_width, 0), alt_string, font=font_big, fill=0)
+    epd_draw.text((2, 6), f"Alt", font=font_small, fill=0)
+    epd_draw.text((35 + long_alt_num_width - alt_num_width, 0), alt_string, font=font_biggest, fill=0)
 
     if is_metric:
         epd_draw.text((28 + long_alt_num_width, 25), alt_metric_string, font=font_medium, fill=0)
     else:
-        epd_draw.text((28 + 2 + long_alt_num_width, 0), "'", font=font_big, fill=0)
+        epd_draw.text((28 + 2 + long_alt_num_width, 0), "'", font=font_biggest, fill=0)
 
-    epd_draw.text((0, 48), f"hPa", font=font_small, fill=0)
-    epd_draw.text((35, 41), press_string, font=font_big, fill=0)
+    epd_draw.text((2, 48), f"hPa", font=font_small, fill=0)
+    epd_draw.text((35, 41), press_string, font=font_biggest, fill=0)
     # epd_draw.text((35 + press_num_width + 3, 41 + 9), press_metric_string, font=font_medium, fill=0)
 
-    epd_draw.text((0, 88), f"GPS", font=font_small, fill=0)
+    epd_draw.text((2, 88), f"GPS", font=font_small, fill=0)
     if gps is not None:
         lat_string = get_lat_string(gps)
         lon_string = get_lon_string(gps)
@@ -880,6 +886,29 @@ def main():
         #     print(f"Loop cycle duration: {loop_duration * 1000:.2f} ms")
 
 
+# HELPER FOR CALIBRATION ONLY
+def init_i2c_barameter_helper_for_calibration():
+    """Helper to initialize I2C bus and sensor objects."""
+    i2c1 = PiZeroI2CBridge("/dev/i2c-1")
+
+    bme = None
+    bmp = None
+    try:
+        bme = BME680_I2C(i2c=i2c1, address=0x77)
+    except Exception as e:
+        print(f"BME680 init error: {e}")
+
+    try:
+        bmp = bmpxxx.BMP585(i2c=i2c1, address=0x47)
+        bmp.pressure_oversample_rate = bmp.OSR128
+        bmp.temperature_oversample_rate = bmp.OSR8
+        bmp.iir_coefficient = bmp.COEF_7
+    except Exception as e:
+        print(f"BMP585 init error: {e}")
+
+    return i2c1, bme, bmp
+
+
 if __name__ == "__main__":
     try:
         main()
@@ -904,3 +933,10 @@ if __name__ == "__main__":
                     epd_disp.epdconfig.module_exit()
         except Exception as e:
             print(f"Failed to sleep E-ink display: {e}")
+
+        print("Releasing GPIO devices (button_1, button_2, button_3, Rotary Encoder).")
+        encoder.close()
+        rotary_switch.close()
+        button_1.close()
+        button_2.close()
+        button_3.close()
