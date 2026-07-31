@@ -1,8 +1,13 @@
-# rotary_encoder_test.py
+#!/usr/bin/env python3
 """
+rotary_encoder_test.py
 Rotary Encoder Port for Raspberry Pi Zero
 
 Adjusts new_alt_feet by +/- 1ft per detent, or by 25 ft if the push button is toggled.
+
+Default:
+    * ONLY +/- 16 steps by default
+    * MUST set
 
 Hardware Configuration Pi Zero
     Encoder CLK: gpio 21 (Pin 40)
@@ -15,8 +20,8 @@ Hardware Configuration Pi Zero
 import time
 from gpiozero import RotaryEncoder, Button
 
-# Rotary encoder setup (CLK=a, DT=b)
-encoder = RotaryEncoder(a=21, b=13, bounce_time=0.005)
+# Rotary encoder setup (CLK=a, DT=b), only +/- 16 step default, unless set max_steps=0 (unlimited)
+encoder = RotaryEncoder(a=21, b=13, max_steps=0, bounce_time=0.005)
 rotary_switch = Button(19, pull_up=True, bounce_time=0.05)
 
 DEBUG = True
@@ -35,7 +40,9 @@ def toggle_multiplier():
 
 rotary_switch.when_pressed = toggle_multiplier
 
-print("Rotary encoder active. Rotate knob or press switch...")
+print("\nRotary encoder active.")
+print("======================")
+print(" * Rotate knob or press switch...")
 new_alt_feet = 365
 
 try:
@@ -56,4 +63,6 @@ try:
         time.sleep(0.02)
 
 except KeyboardInterrupt:
-    print("\nExiting encoder script.")
+    print("\nExiting encoder script.\nreleasing GPIO devices (encoder, rotary_switch).")
+    encoder.close()
+    rotary_switch.close()

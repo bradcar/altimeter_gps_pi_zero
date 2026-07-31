@@ -1,5 +1,7 @@
-# button_rotary_utils.py
+#!/usr/bin/env python3
 """
+button_rotary_utils.py
+
 GPIO buttons and rotary encoder setup, debounce, state, and button flags.
 
 Currently, 3 Physical buttons defined and rotary encoder with switch
@@ -69,6 +71,7 @@ def init_controls(
     _button_3 = Button(pin_button_3, pull_up=True, bounce_time=bounce_time)
     # NOTICE no physical #4 Button
 
+    # Rotary encoder: a = clk, b = DT, max_steps is be default +/-16 steps, 0 means unlimited
     encoder = RotaryEncoder(a=pin_rotary_a, b=pin_rotary_b, bounce_time=0.005)
     rotary_switch = Button(pin_rotary_sw, pull_up=True, bounce_time=bounce_time)
 
