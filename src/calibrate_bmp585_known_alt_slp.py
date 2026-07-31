@@ -164,7 +164,7 @@ if __name__ == "__main__":
     try:
         i2c_bus = run_calibration()
     except KeyboardInterrupt:
-        print("\nCaught Ctrl-C. Exiting Calibration.")
+        print("\nCaught Ctrl-C. Calibration exit.")
     finally:
         if i2c_bus:
             try:
