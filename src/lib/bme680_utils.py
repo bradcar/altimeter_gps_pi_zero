@@ -6,6 +6,13 @@ from math import log
 
 
 def iaq_quality_to_string(iaq_value):
+    """
+    iaq_quality_to_string
+    assuming 0 is warmup
+    all others by standard nomenclature.
+    """
+    if iaq_value == 0:
+        return "warmup"
     if iaq_value < 50:
         return "best"
     elif iaq_value < 100:
