@@ -156,6 +156,14 @@ def run_calibration():
     print(f"Difference in meters = {initial_meters - final_meters:.4f} m")
     print("==========================================\n")
 
+    print("Example of day swing ")
+    s1 = 1010.20
+    s2 = 1023.10
+    m1 = calc_altitude(final_hpa, s1)
+    m2 = calc_altitude(final_hpa, s2)
+    print(f"Alt with {s1} hPa slp predicts & final hPa: {m1:.4f} m")
+    print(f"Alt with {s2} hPa slp predicts & final hPa: {m2:.4f} m")
+
     return i2c_bus
 
 
