@@ -33,6 +33,14 @@ Display
     - The refresh interval is at least 180s, and refresh at least once every 24 hours.
     - If the Eink is not used for a long time, you should clear the screen before long term storage.
 
+TODOS
+    * TODO Add short tap in center of E-Ink to force display refresh
+    * TODO test with other E-Ink display to minimize code overlap
+    * TODO debug messy control-C fault
+    * TODO update E-Ink update straregy
+    * TODO librarie headers
+    * TODO move E-Ink setup into main?
+    * TODO put barometer metrics into . structure like gps
 """
 
 import os
@@ -66,14 +74,14 @@ OVER_TEMP_WARNING = 70.0
 SCREEN_WIDTH = 250
 SCREEN_HEIGHT = 122
 DISPLAY_ROTATION = 90
-MAX_EINK_PARTIAL_REFRESH = 15
 
 # Timing Constants (in seconds)
 LOOP_STRETCH_SLEEP = 0.2  # Small sleep each loop
 GPS_INTERVAL_SEC = 1.0  # Read GPS metrics every 1 seconds
 SENSOR_INTERVAL_SEC = 1.0  # Read core pressure, temp, & other metrics every 2 seconds
 EINK_FULL_REFRESH_SEC = 180.0  # required Full refresh E-ink limit(3 minutes / 180 sec)
-EINK_PARTIAL_REFRESH_SEC = 1.0  # Partial E-ink refresh rate
+MAX_EINK_PARTIAL_REFRESH = 15  # count for partial refresh
+EINK_PARTIAL_REFRESH_SEC = 1.0  # Partial E-ink refresh at least every second
 GAS_INTERVAL_SEC = 30.0  # Read gas IAQ metrics every 30 seconds
 SET_CLOCK_INTERVAL_SEC = 24 * 60 * 60  # Every 24 hours get GPS time to reset system time
 
@@ -278,7 +286,7 @@ def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pres
             need_redraw = True
 
         if rotary_switch.is_pressed:
-            rotary_multiplier = multiplier_big_step  if rotary_multiplier == multiplier_small_step else multiplier_small_step
+            rotary_multiplier = multiplier_big_step if rotary_multiplier == multiplier_small_step else multiplier_small_step
             print(f"Rotary multiplier: {rotary_multiplier}")
             while rotary_switch.is_pressed:
                 time.sleep(0.01)
@@ -429,7 +437,8 @@ def display_gps_details(gps, partial=False):
         if gps.has_fix:
             epd_draw.text((3, 2), f"GPS    ({sats} sats, q={qual})", font=font_small, fill=0)
         else:
-            epd_draw.text((3, 2), f"GPS     ** NO FIX **", font=font_small, fill=0)
+            epd_draw.text((3, 2), "GPS", font=font_small, fill=0)
+            epd_draw.text((45, 0), "** NO FIX **", font=font_medium, fill=0)
 
         clock_string = time.strftime("%I:%M %p", time.localtime()).lower()
         clock_width = font_small.getlength(clock_string)
@@ -499,8 +508,8 @@ def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, is_metric, partial
             if gps.has_fix:
                 epd_draw.text((2, 97), f"GPS", font=font_small, fill=0)
             else:
-                epd_draw.text((2, 88), f"Last", font=font_small, fill=0)
-                epd_draw.text((2, 102), f"Fix", font=font_small, fill=0)
+                epd_draw.text((2, 90), f"Last", font=font_small, fill=0)
+                epd_draw.text((2, 104), f"Fix", font=font_small, fill=0)
 
             lat_string = get_lat_string(gps)
             lon_string = get_lon_string(gps)
@@ -514,15 +523,16 @@ def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, is_metric, partial
     else:
         epd_draw.text((55, 95), "NO GPS Sensor", font=font_medium, fill=0)
 
-    # Dispaly IAQ warning box
-    if iaq and iaq > 150.0:
-        # draw at bottom right
-        epd_draw.rectangle((206, 91, 250, 122), fill=0)
-        epd_draw.text((208, 90), "warn", font=font_small, fill=255)
+    # Display IAQ warning box, if poor or worse at bottom right of big display 0 mode
+    if iaq and iaq > 100.0:
+        epd_draw.rectangle((206, 90, 250, 122), fill=0)
+        if iaq >= 200.0:
+            epd_draw.text((216, 90), "vile", font=font_small, fill=255)
+        elif iaq >= 150.0:
+            epd_draw.text((214, 90), "bad", font=font_small, fill=255)
+        elif iaq >= 100.0:
+            epd_draw.text((209, 90), "poor", font=font_small, fill=255)
         epd_draw.text((210, 104), "IAQ !", font=font_small, fill=255)
-        # # draw at top right
-        # epd_draw.rectangle((211, 0, 250, 18), fill=0)
-        # epd_draw.text((215, 2), "IAQ!", font=font_small, fill=255)
 
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
     flush_touch_inputs()
@@ -643,25 +653,24 @@ def main():
     # Initialize Barometers: BMP585, BME680
     error_bme680 = False
     error_bmp585 = False
+    bme = None
+    bmp = None
+
     try:
         bme = BME680_I2C(i2c=i2c1, address=0x77)
-        bme_exists = True
         print("BME680 initialized")
     except Exception as e:
         error_bme680 = True
-        bme_exists = False
         print(f"ERROR: BME680 not initialized: {e}")
 
     try:
         bmp = bmpxxx.BMP585(i2c=i2c1, address=0x47)
-        bmp_exists = True
         bmp.pressure_oversample_rate = bmp.OSR128
         bmp.temperature_oversample_rate = bmp.OSR8
         bmp.iir_coefficient = bmp.COEF_7
         print("BMP585 initialized")
 
     except Exception as e:
-        bmp_exists = False
         error_bmp585 = True
         print(f"ERROR: BMP585 not initialized: {e}")
 
@@ -676,10 +685,10 @@ def main():
 
     # Calibrate Barometers
     average_diff = 1.0312750  # fallback hPa correction for BME680, if no BMP585
-    if bmp_exists and bme_exists:
+    if bmp is not None and bme is not None:
         average_diff = bme_hpa_correction(bme, bmp, 25)
         print(f" * BMP585 calibration for BME680 = {average_diff:.7f} hPa")
-    elif bme_exists:
+    elif bme is not None:
         print(f" * No BMP585 to calibrate BME680, using default {average_diff:.7f} hPa")
 
     # bme680 hPA amount over will be subtracted in calibration code.
@@ -695,11 +704,8 @@ def main():
     gps = initialize_gps()
     clock_string = None
 
-    # Store previous values to detect actual changes
-    prev_alt = None
-    prev_press = None
-
     first_run = True
+    display_mode = 0
     sync_time_requested = True  # True for first time, then every day, at next fix will set system clock
 
     current_time = time.monotonic()
@@ -726,8 +732,7 @@ def main():
 
     prev_alt = None
     prev_press = None
-    first_run = True
-    eink_parital_refresh_count = 0
+    eink_partial_refresh_count = 0
 
     print("\nstart of main loop")
     while True:
@@ -778,7 +783,7 @@ def main():
                 clock_string = time.strftime("%I:%M:%S", time.localtime())
                 print(f"\nReading sensors @ {current_time:.2f}s \t{clock_string}")
 
-            if error_bme680:
+            if error_bme680 or bme is None:
                 print(f"No lower-precision Altitude BME680 sensor: {error_bme680}\n")
             else:
                 # IAQ Readings (Every 30 seconds), heats chip substrate
@@ -788,7 +793,7 @@ def main():
                     gas_ohms = bme.gas
                     bme_percent_humidity = bme.humidity
                     bme_iaq = calculate_iaq(gas_ohms, bme_percent_humidity)
-                    print(f"IAQ = {bme_iaq:.1f} ({iaq_quality_to_string(bme_iaq)}), {gas_ohms / 1000.0} Kohms")
+                    print(f"IAQ = {bme_iaq:.1f} ({iaq_quality_to_string(bme_iaq)}), {gas_ohms / 1000.0} Kohms\n")
                 else:
                     # Trigger non-gas measurement to cache other BME metrics
                     bme_percent_humidity = bme.humidity
@@ -805,7 +810,7 @@ def main():
                 sys_humidity = bme_percent_humidity
                 sys_iaq = bme_iaq
 
-            if error_bmp585:
+            if error_bmp585 or bmp is None:
                 print(f"No high-precision Altitude bmp585 sensor\n")
             else:
                 bmp_hpa = bmp.pressure
@@ -863,16 +868,15 @@ def main():
                 last_partial_refresh_eink_time = current_time
                 prev_alt = sys_meters
                 prev_press = sys_hpa
-
                 time_since_full = current_time - last_full_refresh_eink_time
-                if (eink_parital_refresh_count >= MAX_EINK_PARTIAL_REFRESH) or (
-                        time_since_full >= EINK_FULL_REFRESH_SEC):
+                if (eink_partial_refresh_count >= MAX_EINK_PARTIAL_REFRESH
+                        or time_since_full >= EINK_FULL_REFRESH_SEC):
                     use_partial = False
-                    eink_parital_refresh_count = 0
+                    eink_partial_refresh_count = 0
                     last_full_refresh_eink_time = current_time
                 else:
                     use_partial = True
-                    eink_parital_refresh_count += 1
+                    eink_partial_refresh_count += 1
 
                 if display_mode == 0:
                     display_big_dashboard(sys_meters, sys_hpa, sys_iaq, gps, is_metric, partial=use_partial)
@@ -923,33 +927,58 @@ def init_i2c_barameter_helper_for_calibration():
 
 
 if __name__ == "__main__":
+    import signal
+
+    exit_reason = "Ctrl-C"
+
+    def handle_exit_signal(sig, frame):
+        global exit_reason
+        exit_reason = "SSH / IDE Disconnect (SIGHUP/SIGTERM)"
+        signal.raise_signal(signal.SIGINT)
+
+    # Route SIGHUP and SIGTERM to trigger the exit block with a distinct reason
+    signal.signal(signal.SIGHUP, handle_exit_signal)
+    signal.signal(signal.SIGTERM, handle_exit_signal)
+
     try:
         main()
     except KeyboardInterrupt:
-        print("\nCaught Ctrl-C.\nDisplay final altitude details.")
+        # Ignore additional signals during shutdown
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+
+        print(f"\nExit signal received [{exit_reason}]. Showing final altitude display...")
         try:
-            # Display final altitude measurements before sleep
-            display_altimeter_details(sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric, is_final=True,
-                                      partial=False)
+            # Render final screen state while GPIOs and SPI are still active
+            display_altimeter_details(
+                sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq,
+                is_metric, is_final=True, partial=False
+            )
         except Exception as e:
             print(f"Error drawing final display on exit: {e}")
-    finally:
-        try:
-            i2c1.close()
-        except Exception as e:
-            print(f"Failed to close I2C: {e}")
-        try:
-            if 'epd_disp' in locals() and epd_disp is not None:
-                epd_disp.sleep()
 
+    finally:
+        # Clean up display and hardware interfaces safely in sequence
+        try:
+            if 'epd_disp' in globals() and epd_disp is not None:
+                epd_disp.sleep()
+                print(f"E-ink put to sleep.")
                 if hasattr(epd_disp, 'epdconfig'):
                     epd_disp.epdconfig.module_exit()
         except Exception as e:
             print(f"Failed to sleep E-ink display: {e}")
 
+        try:
+            if 'i2c1' in globals() and i2c1 is not None:
+                i2c1.close()
+        except Exception as e:
+            print(f"Failed to close I2C: {e}")
+
+        # Release gpiozero devices
         print("Releasing GPIO devices (button_1, button_2, button_3, Rotary Encoder).")
-        encoder.close()
-        rotary_switch.close()
-        button_1.close()
-        button_2.close()
-        button_3.close()
+        for dev_name in ('encoder', 'rotary_switch', 'button_1', 'button_2', 'button_3'):
+            if dev_name in globals():
+                try:
+                    globals()[dev_name].close()
+                except Exception as e:
+                    print(f"Error closing {dev_name}: {e}")
