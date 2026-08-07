@@ -1,5 +1,7 @@
-# eink_ssd1680_gt911_utils.py
+#!/usr/bin/env python3
 """
+eink_ssd1680_gt911_utils.py
+
 Utils for Waveshare 2.13" E-Paper Touch Hat (epd2in13_V4)
 Driver & canvas helpers
 
@@ -18,6 +20,7 @@ wget https://files.waveshare.com/upload/4/4e/Touch_e-Paper_Code.zip
 unzip Touch_e-Paper_Code.zip -d Touch_e-Paper_Code
 
 """
+import gc
 import sys
 import time
 from dataclasses import dataclass
@@ -273,13 +276,18 @@ def get_rotated_buffer(img):
 
 
 def refresh_eink_display(disp, draw, img, partial=True):
+    """
+    Partial and full E-Ink refresh. Full refresh also does gc (Garbage collection).
+    """
     global partial_refresh_count, epd_disp
 
     if not partial or partial_refresh_count >= MAX_PARTIAL_REFRESHES:
+        # Full refresh (1-3 seconds)
         epd_disp.init(epd_disp.FULL_UPDATE)
         epd_disp.displayPartBaseImage(get_rotated_buffer(img))
         epd_disp.init(epd_disp.PART_UPDATE)
         partial_refresh_count = 0
+        gc.collect()
     else:
         # Fast partial update pass (~300ms)
         epd_disp.displayPartial(get_rotated_buffer(img))
