@@ -14,6 +14,9 @@ Sensors used
     - Touch display 5 points
     - Metric/Imperial switch
 
+Functionality
+    - gc - garbage collection every 30min (at gas burn) and full E-Ink refresh.
+
 Use sea level pressure at nearest airport
     * Portland updated hourly (7 min before the hour)
         https://www.weather.gov/wrh/timeseries?site=KPDX
@@ -36,13 +39,12 @@ Display
 TODOS
     * TODO Add short tap in center of E-Ink to force display refresh
     * TODO test with other E-Ink display to minimize code overlap
-    * TODO debug messy control-C fault
-    * TODO update E-Ink update straregy
-    * TODO librarie headers
+    * TODO clean up library headers
     * TODO move E-Ink setup into main?
-    * TODO put barometer metrics into . structure like gps
+    * TODO put barometer metrics intro . structure like gps
 """
 
+import gc
 import os
 import sys
 import time
@@ -74,6 +76,7 @@ OVER_TEMP_WARNING = 70.0
 SCREEN_WIDTH = 250
 SCREEN_HEIGHT = 122
 DISPLAY_ROTATION = 90
+TOUCH_DEBOUNCE_SEC = 0.35  # Ignore touch events within 350ms of the last trigger
 
 # Timing Constants (in seconds)
 LOOP_STRETCH_SLEEP = 0.2  # Small sleep each loop
@@ -94,6 +97,9 @@ def uname():
 
 
 # Buttons
+# E-Ink button
+_last_touch_time = 0
+
 # Button 1: Cycle through display Summary and Details (GPIO 15)
 #           E-ink: "Down" Button: actually GPIO 5 NOT GPIO 6
 # Button 2: Adjust altitude/SLP (GPIO 5)
@@ -109,10 +115,10 @@ button_3 = Button(16, pull_up=True, bounce_time=0.05)
 encoder = RotaryEncoder(a=21, b=13, max_steps=0, bounce_time=0.005)
 rotary_switch = Button(19, pull_up=True, bounce_time=0.05)
 
-button_1_pushed = False
-button_2_pushed = False
-button_3_pushed = False
-button_4_pushed = False
+_button_1_pushed = False
+_button_2_pushed = False
+_button_3_pushed = False
+_button_4_pushed = False
 
 # Initialize the SSD1680 E-ink hardware & Pillow canvas
 # TODO Add timeout from pi_zero_utils.py
@@ -154,23 +160,23 @@ debounce_3_time = 0
 
 
 def button_3_handler():
-    global button_3_pushed, debounce_3_time
+    global _button_3_pushed, debounce_3_time
     if (ticks_ms() - debounce_3_time) > 250:
-        button_3_pushed = True
+        _button_3_pushed = True
         debounce_3_time = ticks_ms()
 
 
 def button_2_handler():
-    global button_2_pushed, debounce_2_time
+    global _button_2_pushed, debounce_2_time
     if (ticks_ms() - debounce_2_time) > 250:
-        button_2_pushed = True
+        _button_2_pushed = True
         debounce_2_time = ticks_ms()
 
 
 def button_1_handler():
-    global button_1_pushed, debounce_1_time
+    global _button_1_pushed, debounce_1_time
     if (ticks_ms() - debounce_1_time) > 250:
-        button_1_pushed = True
+        _button_1_pushed = True
         debounce_1_time = ticks_ms()
 
 
@@ -180,9 +186,9 @@ button_3.when_pressed = button_3_handler
 
 
 def button1():
-    global button_1_pushed
-    if button_1_pushed:
-        button_1_pushed = False
+    global _button_1_pushed
+    if _button_1_pushed:
+        _button_1_pushed = False
         print("* Button 1 Pushed")
         return True
     else:
@@ -190,9 +196,9 @@ def button1():
 
 
 def button2():
-    global button_2_pushed
-    if button_2_pushed:
-        button_2_pushed = False
+    global _button_2_pushed
+    if _button_2_pushed:
+        _button_2_pushed = False
         print("* Button 2 Pushed")
         return True
     else:
@@ -200,9 +206,9 @@ def button2():
 
 
 def button3():
-    global button_3_pushed
-    if button_3_pushed:
-        button_3_pushed = False
+    global _button_3_pushed
+    if _button_3_pushed:
+        _button_3_pushed = False
         print("* Button 3 Pushed")
         return True
     else:
@@ -210,9 +216,9 @@ def button3():
 
 
 def button4():
-    global button_4_pushed
-    if button_4_pushed:
-        button_4_pushed = False
+    global _button_4_pushed
+    if _button_4_pushed:
+        _button_4_pushed = False
         print("* Button 4 Pushed")
         return True
     else:
@@ -259,7 +265,6 @@ def display_altitude_reference(is_metric, partial=False):
 
     display_list_names_values(altitude_data, font_list, line_height, start_y, left_margin_x, right_align_x)
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
-    flush_touch_inputs()
     time.sleep(5)
 
 
@@ -351,7 +356,6 @@ def display_updated_altitude_calibration(alt, press, is_metric, partial=False):
     epd_draw.text((60, 74), press_val, font=font_large, fill=0)
 
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
-    flush_touch_inputs()
 
 
 def print_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric):
@@ -420,7 +424,6 @@ def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, i
         right_align_x = 209
     display_list_names_values(sensor_data, font_list, line_height, start_y, left_margin_x, right_align_x)
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
-    flush_touch_inputs()
 
 
 def display_gps_details(gps, partial=False):
@@ -535,7 +538,6 @@ def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, is_metric, partial
         epd_draw.text((210, 104), "IAQ !", font=font_small, fill=255)
 
     refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
-    flush_touch_inputs()
 
 
 def print_gps_metrics(gps: GPS, time_zone_hours: int):
@@ -606,8 +608,18 @@ def check_touch_buttons(rotation: int = DISPLAY_ROTATION):
     - Upper Right (y >  125, x <= 61) -> Button 3 (Metric / Imperial Unit Toggle)
     - Lower Right (y >  125, x >  61) -> Reserved Area
     """
-    global button_1_pushed, button_2_pushed, button_3_pushed, button_4_pushed
 
+    global _button_1_pushed, _button_2_pushed, _button_3_pushed, _button_4_pushed, _last_touch_time
+
+    current_time = time.monotonic()
+
+    # Guard: Do NOT pull from GT911 if inside the lockout window
+    if (current_time - _last_touch_time) < TOUCH_DEBOUNCE_SEC:
+        # Purge any extra hardware samples accumulating in buffer during lockout
+        flush_touch_inputs()
+        return None
+
+    # Fetch fresh touch inputs from GT911
     touch_data = check_touch_inputs(rotation=rotation)
     if not touch_data:
         return None
@@ -621,17 +633,21 @@ def check_touch_buttons(rotation: int = DISPLAY_ROTATION):
     if y <= 125:
         if x <= 61:
             print(f"* Touch Upper Left (Y={y}, X={x}) -> Trigger Button 1")
-            button_1_pushed = True
+            _button_1_pushed = True
         else:
             print(f"* Touch Lower Left (Y={y}, X={x}) -> Trigger Button 2")
-            button_2_pushed = True
+            _button_2_pushed = True
     else:
         if x <= 61:
             print(f"* Touch Upper Right (Y={y}, X={x}) -> Trigger Button 3")
-            button_3_pushed = True
+            _button_3_pushed = True
         else:
             print(f"* Touch Lower Right (Y={y}, X={x}) -> Reserved Area")
-            button_4_pushed = True
+            _button_4_pushed = True
+
+    # Timestamp AND immediately flush touch buffers
+    _last_touch_time = current_time
+    flush_touch_inputs()
 
 
 def main():
@@ -735,6 +751,7 @@ def main():
     eink_partial_refresh_count = 0
 
     print("\nstart of main loop")
+    gc.collect()
     while True:
         start_loop_tick = time.monotonic()
         current_time = time.monotonic()
@@ -749,6 +766,7 @@ def main():
             display_mode = (display_mode + 1) % 3
             print(f"* Switched to Display Mode: {display_mode}")
             force_eink_update = True
+            eink_partial_refresh_count = 0
 
         # Button 2: Altitude/SLP Calibration
         if button2():
@@ -760,16 +778,18 @@ def main():
                 sea_level_pressure_hpa=sea_level_pressure,
             )
             force_eink_update = True
+            eink_partial_refresh_count = 0
 
         # Button 3: Unit toggle
         if button3():
             is_metric = not is_metric
             force_eink_update = True
+            eink_partial_refresh_count = 0
 
         if button4():
             display_altitude_reference(is_metric)
             force_eink_update = True
-            time.sleep(5)
+            eink_partial_refresh_count = 0
 
         # Barometer, Temperature, humidity, IAQ (Every 2 seconds)
         if (current_time - last_sensor_time) >= SENSOR_INTERVAL_SEC or first_run:
@@ -794,6 +814,7 @@ def main():
                     bme_percent_humidity = bme.humidity
                     bme_iaq = calculate_iaq(gas_ohms, bme_percent_humidity)
                     print(f"IAQ = {bme_iaq:.1f} ({iaq_quality_to_string(bme_iaq)}), {gas_ohms / 1000.0} Kohms\n")
+                    gc.collect()
                 else:
                     # Trigger non-gas measurement to cache other BME metrics
                     bme_percent_humidity = bme.humidity
@@ -850,45 +871,35 @@ def main():
 
         # E-ink Display Refresh, partial and full updates
         if force_eink_update or (current_time - last_partial_refresh_eink_time) >= EINK_PARTIAL_REFRESH_SEC:
+            last_partial_refresh_eink_time = current_time
+            prev_alt = sys_meters
+            prev_press = sys_hpa
+            time_since_full = current_time - last_full_refresh_eink_time
 
-            # Mode 0 updates on sensor value change or full refresh requested
-            values_changed = (
-                    prev_alt is None
-                    or abs(sys_meters - prev_alt) > 0.1
-                    or abs(sys_hpa - prev_press) > 0.01
-            )
-            # Modes 1 & 2 update each loop
-            should_refresh = (
-                    force_eink_update
-                    or (display_mode == 0 and values_changed)
-                    or display_mode in (1, 2)
-            )
+            # Button presses (force_eink_update) force partial refresh for instant UI response
+            if not force_eink_update and (
+                    eink_partial_refresh_count >= MAX_EINK_PARTIAL_REFRESH
+                    or time_since_full >= EINK_FULL_REFRESH_SEC
+            ):
+                use_partial = False
+                eink_partial_refresh_count = 0
+                last_full_refresh_eink_time = current_time
+            else:
+                use_partial = True
+                eink_partial_refresh_count += 1
 
-            if should_refresh:
-                last_partial_refresh_eink_time = current_time
-                prev_alt = sys_meters
-                prev_press = sys_hpa
-                time_since_full = current_time - last_full_refresh_eink_time
-                if (eink_partial_refresh_count >= MAX_EINK_PARTIAL_REFRESH
-                        or time_since_full >= EINK_FULL_REFRESH_SEC):
-                    use_partial = False
-                    eink_partial_refresh_count = 0
-                    last_full_refresh_eink_time = current_time
-                else:
-                    use_partial = True
-                    eink_partial_refresh_count += 1
+            if display_mode == 0:
+                display_big_dashboard(sys_meters, sys_hpa, sys_iaq, gps, is_metric, partial=use_partial)
+            elif display_mode == 1:
+                display_altimeter_details(
+                    sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric, is_final=False,
+                    partial=use_partial
+                )
+            elif display_mode == 2:
+                display_gps_details(gps, partial=use_partial)
 
-                if display_mode == 0:
-                    display_big_dashboard(sys_meters, sys_hpa, sys_iaq, gps, is_metric, partial=use_partial)
-                elif display_mode == 1:
-                    display_altimeter_details(
-                        sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric, is_final=False,
-                        partial=use_partial
-                    )
-                elif display_mode == 2:
-                    display_gps_details(gps, partial=use_partial)
-
-                flush_touch_inputs()
+            flush_touch_inputs()
+            gc.collect()
 
         # Sleep to reduce CPU utilization
         if LOOP_STRETCH_SLEEP > 0:
@@ -928,28 +939,24 @@ def init_i2c_barameter_helper_for_calibration():
 
 if __name__ == "__main__":
     import signal
+    import atexit
 
-    exit_reason = "Ctrl-C"
+    exit_reason = "Normal Exit"
+    cleaned_up = False
 
-    def handle_exit_signal(sig, frame):
-        global exit_reason
-        exit_reason = "SSH / IDE Disconnect (SIGHUP/SIGTERM)"
-        signal.raise_signal(signal.SIGINT)
 
-    # Route SIGHUP and SIGTERM to trigger the exit block with a distinct reason
-    signal.signal(signal.SIGHUP, handle_exit_signal)
-    signal.signal(signal.SIGTERM, handle_exit_signal)
+    def perform_cleanup():
+        global cleaned_up
+        if cleaned_up:
+            return
+        cleaned_up = True
 
-    try:
-        main()
-    except KeyboardInterrupt:
-        # Ignore additional signals during shutdown
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        print(f"\nPerforming teardown [{exit_reason}]...")
 
-        print(f"\nExit signal received [{exit_reason}]. Showing final altitude display...")
+        # Render final barometer/altitude details screen before powering down
         try:
-            # Render final screen state while GPIOs and SPI are still active
+            print("Displaying final altitude details"
+                  "...")
             display_altimeter_details(
                 sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq,
                 is_metric, is_final=True, partial=False
@@ -957,28 +964,56 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Error drawing final display on exit: {e}")
 
-    finally:
-        # Clean up display and hardware interfaces safely in sequence
+        # E-Ink Sleep
         try:
             if 'epd_disp' in globals() and epd_disp is not None:
                 epd_disp.sleep()
-                print(f"E-ink put to sleep.")
                 if hasattr(epd_disp, 'epdconfig'):
                     epd_disp.epdconfig.module_exit()
         except Exception as e:
             print(f"Failed to sleep E-ink display: {e}")
 
+        # I2C Teardown
         try:
             if 'i2c1' in globals() and i2c1 is not None:
                 i2c1.close()
         except Exception as e:
             print(f"Failed to close I2C: {e}")
 
-        # Release gpiozero devices
-        print("Releasing GPIO devices (button_1, button_2, button_3, Rotary Encoder).")
+        # Release GPIO
+        print("Releasing GPIO devices...")
         for dev_name in ('encoder', 'rotary_switch', 'button_1', 'button_2', 'button_3'):
             if dev_name in globals():
                 try:
                     globals()[dev_name].close()
                 except Exception as e:
                     print(f"Error closing {dev_name}: {e}")
+
+
+    # Register exit hook for interpreter termination
+    atexit.register(perform_cleanup)
+
+
+    def handle_exit_signal(sig, frame):
+        global exit_reason
+        sig_names = {signal.SIGHUP: "SIGHUP (IDE/SSH Disconnect)", signal.SIGTERM: "SIGTERM (Termination Request)"}
+        exit_reason = sig_names.get(sig, f"Signal {sig}")
+        print(f"\nCaught signal: {exit_reason}")
+        raise KeyboardInterrupt
+
+
+    # Catch standard exit signals
+    signal.signal(signal.SIGHUP, handle_exit_signal)
+    signal.signal(signal.SIGTERM, handle_exit_signal)
+
+    try:
+        main()
+    except KeyboardInterrupt:
+        if exit_reason == "Normal Exit":
+            exit_reason = "Ctrl-C (SIGINT)"
+
+        # Ignore further signals during final display refresh
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    finally:
+        perform_cleanup()
