@@ -32,6 +32,8 @@ References:
 
 import sys
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from barometer_utils import calc_sea_level_pressure
 from metric_imperial_utils import meters_to_feet
@@ -45,11 +47,12 @@ from main_ws import (
     rotary_switch,  # Reusing initialized Button object
 )
 
-INITIAL_SEA_LEVEL_PRESSURE = 1018.00
+# Guess at adjustment: the corrections are calculated by what to add to hPa, so that is subtracted here
+INITIAL_SEA_LEVEL_PRESSURE = 1018.80 - (-1.12)
 
 MULTIPLIER_SMALL_STEP = 0.001
 MULTIPLIER_BIG_STEP = 1.0
-IS_METRIC = False
+IS_METRIC = True
 
 
 def write_slp_file(new_slp):
@@ -62,11 +65,14 @@ def write_slp_file(new_slp):
         print(f"Failed to save Sea Level Pressure to file: {e}")
 
 
-def print_updated_altitude_calibration(altitude, slp_pressure, is_metric):
+def print_updated_altitude_calibration(altitude, new_slp_pressure, initial_slp, is_metric):
     """Prints formatted calibration metrics to standard output."""
-    convert, unit = metric_format(is_metric)
-    alt_val = f"{(altitude * convert):.4f} {unit}"
-    print(f" -> Adjusted Altitude: {alt_val:>12} | SLP: {slp_pressure:.4f} hPa")
+    conversion, unit = metric_format(is_metric)
+    if is_metric:
+        alt_val = f"{(altitude * conversion):.4f} {unit}"
+    else:
+        alt_val = f"{meters_to_feet(altitude * conversion):.4f} {unit}"
+    print(f" -> Adjusted Altitude: {alt_val:>12} | SLP: {new_slp_pressure:.4f} hPa    --> {initial_slp - new_slp_pressure:.4f} hPa")
 
 
 def precision_adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pressure_hpa):
@@ -77,6 +83,9 @@ def precision_adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_
 
     """
     new_alt = altitude_m
+
+    # use initial slp as starting point for new_slp
+    initial_slp = sea_level_pressure_hpa
     new_slp = sea_level_pressure_hpa
 
     #
@@ -125,6 +134,7 @@ def precision_adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_
             if rotary_old != rotary_new:
                 delta = rotary_new - rotary_old
 
+                print(f"{is_metric}")
                 if is_metric:
                     new_alt += delta * rotary_multiplier
                 else:
@@ -134,7 +144,7 @@ def precision_adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_
                 rotary_old = rotary_new
 
                 # Only print when values actually change
-                print_updated_altitude_calibration(new_alt, new_slp, is_metric)
+                print_updated_altitude_calibration(new_alt, new_slp, initial_slp, is_metric)
 
             time.sleep(0.02)  # Polling interval
 
@@ -151,6 +161,10 @@ def precision_adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_
 def run_calibration():
     print("\nBMP585 Sensor Calibration to know Altitude & Sea Level Pressure")
     print("===============================================================")
+
+    timestamp = datetime.now(ZoneInfo("America/Los_Angeles")).isoformat()
+    print(f"Timestamp: {timestamp}\n")
+
     initial_slp_hpa = INITIAL_SEA_LEVEL_PRESSURE
     is_metric = IS_METRIC
 
@@ -165,22 +179,31 @@ def run_calibration():
         print("ERROR: No BMP585 barometer detected on I2C bus. Exiting.")
         sys.exit(1)
 
-    starting_bmp_hpa = bmp.pressure
-    starting_bme_hpa = bme.pressure
-    current_alt_m = calc_altitude(starting_bmp_hpa, initial_slp_hpa)
+    initial_bmp_hpa = bmp.pressure
+    initial_bme_hpa = bme.pressure
 
-    print(f"Current SLP Baseline BMP585: {initial_slp_hpa:.4f} hPa")
-    print(f"Current Raw Pressure BMP585: {starting_bmp_hpa:.4f} hPa")
-    print(f"Current Measured Alt BMP585: {current_alt_m:.4f} meter, {meters_to_feet(current_alt_m):.2f} feet")
-    print(f"Starting BMP585 pressure BMP585: {starting_bmp_hpa:.4f} hPa")
-    print(f"Starting BME680 pressure BMP585: {starting_bme_hpa:.4f} hPa")
+    print(f"Current SLP Baseline BMP585: {initial_slp_hpa:.4f} hPa\n")
+
+    print(f"Initial BMP585 pressure BMP585: {initial_bmp_hpa:.4f} hPa")
+    print(f"Initial BME680 pressure BME680: {initial_bme_hpa:.4f} hPa\n")
+
+    initial_bmp_alt = bmp.altitude
+    initial_bme_alt = bme.altitude
+    print(f"Initial BMP585 altitude BMP585: {initial_bmp_alt:.4f} meter, {meters_to_feet(initial_bmp_alt):.2f} feet")
+    print(f"Initial BME680 altitude BME680: {initial_bme_alt:.4f} meter, {meters_to_feet(initial_bme_alt):.2f} feet\n")
+
+    calc_alt_m = calc_altitude(initial_bmp_hpa, initial_slp_hpa)
+    if calc_alt_m != initial_bmp_alt:
+        print(f"calc_altitude method != bmp.altitude")
+        print(f"calc_altitude={calc_alt_m:.4f} meter, {meters_to_feet(calc_alt_m):.2f} feet\n")
+
 
     # Run loop
     final_slp, final_hpa = precision_adjust_altitude_slp(
         gps=None,
         is_metric=is_metric,
-        altitude_m=current_alt_m,
-        pressure_hpa=starting_bmp_hpa,
+        altitude_m=calc_alt_m,
+        pressure_hpa=initial_bmp_hpa,
         sea_level_pressure_hpa=initial_slp_hpa,
     )
 
@@ -193,11 +216,15 @@ def run_calibration():
     print(f" BMP585 START Sea Level Pressure:     {initial_slp_hpa:.4f} hPa")
     print(f" BMP585 Final New Sea Level Pressure: {final_slp:.4f} hPa")
     print(f" BMP585 Correction (Init - new): {initial_slp_hpa - final_slp:.4f} hpa\n")
-    print(f" START BMP585 pressure : {starting_bmp_hpa:.4f} hPa")
+    print(f" START BMP585 pressure : {initial_bmp_hpa:.4f} hPa")
     print(f" FINAL BMP585 pressure : {bmp.pressure:.4f} hPa, SLP: {bmp.sea_level_pressure:.4f} hPa")
     print(f" START BME680 pressure : {bme.pressure:.4f} hPa, SLP: {bme.sea_level_pressure:.4f} hPa\n")
     print(f" DIFF: BMP585 Correction (Init - new): {initial_slp_hpa - final_slp:.4f} hpa")
-    print(f" DIFF: START BMP585 - START BMP680   : {starting_bmp_hpa - starting_bme_hpa:.4f} hpa\n")
+    print(f" DIFF: START BMP585 - START BMP680   : {initial_bmp_hpa - initial_bme_hpa:.4f} hpa\n")
+
+    bme_total_offset = (initial_slp_hpa - final_slp) + (initial_bmp_hpa - initial_bme_hpa)
+    print(f" DIFF: BMP680 total error   : {bme_total_offset:.4f} hpa\n")
+
     print("------------------------------------------\n")
     initial_meters = calc_altitude(final_hpa, initial_slp_hpa)
     final_meters = calc_altitude(final_hpa, final_slp)
