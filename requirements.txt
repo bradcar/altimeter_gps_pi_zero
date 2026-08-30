@@ -1,4 +1,9 @@
 # Python dependencies
+# *** WARNING SOME PRE-compiled must be done by hand ***
+# sudo apt install -y python3-rpi.gpio python3-smbus python3-dev build-essential
+# sudo apt install -y swig python3-dev libswig-dev build-essential
+# ~/.virtualenvs/altimeter_gps_pi_zero/bin/python -m pip install rpi_ws281x
+#
 # run with: /home/pi-admin/.virtualenvs/altimeter_gps_pi_zero/bin/pip install -r requirements.txt
 matplotlib
 numpy
@@ -16,6 +21,6 @@ adafruit-circuitpython-epd
 
 # Waveshare Eink Display
 spidev
-RPi.GPIO
+#RPi.GPIO
 smbus2
-smbus
+#smbus

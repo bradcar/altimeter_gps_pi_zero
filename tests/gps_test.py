@@ -37,6 +37,7 @@ def main():
     gps = initialize_gps()
 
     last_gps_time = time.monotonic()
+    loop_count = 0
     while True:
         has_new_gps = gps.update()
 
@@ -45,7 +46,8 @@ def main():
         if current - last_gps_time >= 1.0:
             last_gps_time = current
             if not gps.has_fix:
-                print("Waiting for fix...")
+                loop_count += 1
+                print(f"Waiting for fix... loop={loop_count}")
                 continue
 
             print()

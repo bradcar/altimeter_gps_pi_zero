@@ -44,6 +44,10 @@ def initialize_gps():
     """
     print("\nInitializing GPS...")
     uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=10)
+    # Sometimes, passing permissions through symlinks inside Python virtual environments fails silently. Let's bypass the symlink entirely.
+    # TODO Change from /dev/serial0 to the direct hardware node:
+    # uart = serial.Serial("/dev/ttyAMA0", baudrate=9600, timeout=10)
+
 
     # Turn on the basic GGA, RMC, GGA(Accuracy), update time 1sec, 1Hz (if change Hz, check UART timeout)
 

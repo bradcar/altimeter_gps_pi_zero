@@ -36,7 +36,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from barometer_utils import calc_sea_level_pressure
-from metric_imperial_utils import meters_to_feet
+from metric_imperial_utils import meters_to_feet, feet_to_meters
 
 # Import hardware instances & helpers directly from main_ws
 from main_ws import (
@@ -48,11 +48,12 @@ from main_ws import (
 )
 
 # Guess at adjustment: the corrections are calculated by what to add to hPa, so that is subtracted here
-INITIAL_SEA_LEVEL_PRESSURE = 1018.80 - (-1.12)
+INITIAL_SEA_LEVEL_PRESSURE = 1018.30 - (-1.12)
+INITIAL_SEA_LEVEL_PRESSURE = 1018.30
 
 MULTIPLIER_SMALL_STEP = 0.001
 MULTIPLIER_BIG_STEP = 1.0
-IS_METRIC = True
+IS_METRIC = False
 
 
 def write_slp_file(new_slp):
@@ -65,14 +66,12 @@ def write_slp_file(new_slp):
         print(f"Failed to save Sea Level Pressure to file: {e}")
 
 
-def print_updated_altitude_calibration(altitude, new_slp_pressure, initial_slp, is_metric):
+def print_updated_altitude_calibration(altitude_meter, new_slp_pressure, initial_slp, is_metric):
     """Prints formatted calibration metrics to standard output."""
     conversion, unit = metric_format(is_metric)
-    if is_metric:
-        alt_val = f"{(altitude * conversion):.4f} {unit}"
-    else:
-        alt_val = f"{meters_to_feet(altitude * conversion):.4f} {unit}"
-    print(f" -> Adjusted Altitude: {alt_val:>12} | SLP: {new_slp_pressure:.4f} hPa    --> {initial_slp - new_slp_pressure:.4f} hPa")
+    alt_val = f"{(altitude_meter * conversion):.4f} {unit}"
+    print(
+        f" -> Adjusted Altitude: {alt_val:>12} | SLP: {new_slp_pressure:.4f} hPa    --> {initial_slp - new_slp_pressure:.4f} hPa")
 
 
 def precision_adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pressure_hpa):
@@ -82,6 +81,9 @@ def precision_adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_
     Returns on  control-C (KeyboardInterrupt).
 
     """
+    print("  Rotate knob to adjust. Press switch to toggle step size.")
+    print("  Press Ctrl+C to exit.\n")
+
     new_alt = altitude_m
 
     # use initial slp as starting point for new_slp
@@ -90,24 +92,20 @@ def precision_adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_
 
     #
     multiplier_small_step = MULTIPLIER_SMALL_STEP
-    multiplier_big_step =  MULTIPLIER_BIG_STEP
+    multiplier_big_step = MULTIPLIER_BIG_STEP
     rotary_multiplier = multiplier_small_step
 
     rotary_old = encoder.steps
 
     if is_metric:
+        display_alt = new_alt
         metric_string = "meter"
-        print(f"\n* CALIBRATION in Meters STARTED")
     else:
-        metric_string="feet"
-        print(f"\n* CALIBRATION in Feet STARTED")
-
-
-    print("  Rotate knob to adjust. Press switch to toggle step size.")
-    print("  Press Ctrl+C to exit.\n")
-
-    print(f"INITIAL State -> Alt: {new_alt:.3f} {metric_string} | SLP: {new_slp:.3f} hPa")
-    print(f"Current step size: {rotary_multiplier:.3f} {metric_string}")
+        display_alt = meters_to_feet(new_alt)
+        metric_string = "feet"
+    print(f"\n* CALIBRATION in {metric_string.upper()} Started.\n")
+    print(f"INITIAL State -> Alt: {display_alt:.3f} {metric_string} | SLP: {new_slp:.3f} hPa")
+    print(f"Current step size: {rotary_multiplier:.3f} {metric_string}\n")
 
     try:
         while True:
@@ -131,19 +129,17 @@ def precision_adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_
 
             # Check rotary encoder rotation
             rotary_new = encoder.steps
+
             if rotary_old != rotary_new:
                 delta = rotary_new - rotary_old
 
-                print(f"{is_metric}")
                 if is_metric:
                     new_alt += delta * rotary_multiplier
                 else:
-                    new_alt += (delta * rotary_multiplier) / 3.28084
+                    new_alt += feet_to_meters(delta * rotary_multiplier)
 
                 new_slp = calc_sea_level_pressure(pressure_hpa, new_alt)
                 rotary_old = rotary_new
-
-                # Only print when values actually change
                 print_updated_altitude_calibration(new_alt, new_slp, initial_slp, is_metric)
 
             time.sleep(0.02)  # Polling interval
@@ -197,7 +193,6 @@ def run_calibration():
         print(f"calc_altitude method != bmp.altitude")
         print(f"calc_altitude={calc_alt_m:.4f} meter, {meters_to_feet(calc_alt_m):.2f} feet\n")
 
-
     # Run loop
     final_slp, final_hpa = precision_adjust_altitude_slp(
         gps=None,
@@ -228,7 +223,8 @@ def run_calibration():
     print("------------------------------------------\n")
     initial_meters = calc_altitude(final_hpa, initial_slp_hpa)
     final_meters = calc_altitude(final_hpa, final_slp)
-    print(f"Alt with START  SLP predicts & final hPa: {initial_meters:.4f} m, {meters_to_feet(initial_meters):.2f} feet")
+    print(
+        f"Alt with START  SLP predicts & final hPa: {initial_meters:.4f} m, {meters_to_feet(initial_meters):.2f} feet")
     print(f"Alt with FINAL  SLP predicts & final hPa: {final_meters:.4f} m, {meters_to_feet(final_meters):.2f} feet")
     difference_meters = final_meters - initial_meters
     print(f"Difference in meters = {difference_meters:.4f} m, {meters_to_feet(difference_meters):.4f} feet")

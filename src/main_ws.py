@@ -37,6 +37,8 @@ Display
     - If the Eink is not used for a long time, you should clear the screen before long term storage.
 
 TODOS
+    * TOdo why is Reading sensors @ 198.66s 	12:24:06 (clock wrong)
+    * todo add warning the GPS altitude is diff than barometer
     * TODO Add short tap in center of E-Ink to force display refresh
     * TODO test with other E-Ink display to minimize code overlap
     * TODO clean up library headers
@@ -717,9 +719,13 @@ def main():
     print(" Barometers Initialization Done.")
 
     # Start GPS, Pi Zero uses UART & pyserial library
+    sys_meters = 0.0  # or None / default value
     gps = initialize_gps()
+    if gps is None:
+        print(f" GPS could not be initialized!")
     clock_string = None
 
+    # Initialize state for loop
     first_run = True
     display_mode = 0
     sync_time_requested = True  # True for first time, then every day, at next fix will set system clock
@@ -863,7 +869,7 @@ def main():
                         # only after successful Pi system time reset, turn off synch request flag
                         sync_time_requested = False
             else:
-                print("...Waiting for fix...")
+                print("...Waiting for GPS fix...")
 
         # Every day request that Pi's system time synchronized with GPS
         if (current_time - last_clock_set_time) >= SET_CLOCK_INTERVAL_SEC:

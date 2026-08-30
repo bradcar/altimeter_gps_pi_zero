@@ -90,9 +90,9 @@ button_3 = Button(6, pull_up=True, bounce_time=0.05)
 encoder = RotaryEncoder(a=21, b=13, bounce_time=0.005)
 rotary_switch = Button(19, pull_up=True, bounce_time=0.05)
 
-button_1_pushed = False
-button_2_pushed = False
-button_3_pushed = False
+_button_1_pushed = False
+_button_2_pushed = False
+_button_3_pushed = False
 
 # buzzer = ??
 
@@ -134,7 +134,7 @@ debounce_3_time = 0
 
 
 def button_1_handler():
-    global button_1_pushed, debounce_1_time
+    global _button_1_pushed, debounce_1_time
     if (ticks_ms() - debounce_1_time) > 250:
         button_1_pushed = True
         debounce_1_time = ticks_ms()
@@ -142,14 +142,14 @@ def button_1_handler():
 
 
 def button_2_handler():
-    global button_2_pushed, debounce_2_time
+    global _button_2_pushed, debounce_2_time
     if (ticks_ms() - debounce_2_time) > 250:
         button_2_pushed = True
         debounce_2_time = ticks_ms()
 
 
 def button_3_handler():
-    global button_3_pushed, debounce_3_time
+    global _button_3_pushed, debounce_3_time
     if (ticks_ms() - debounce_3_time) > 250:
         button_3_pushed = True
         debounce_3_time = ticks_ms()
@@ -161,7 +161,7 @@ button_3.when_pressed = button_3_handler
 
 
 def button1():
-    global button_1_pushed
+    global _button_1_pushed
     if button_1_pushed:
         button_1_pushed = False
         print("* Button 1 Pushed")
@@ -171,7 +171,7 @@ def button1():
 
 
 def button2():
-    global button_2_pushed
+    global _button_2_pushed
     if button_2_pushed:
         button_2_pushed = False
         print("* Button 2 Pushed")
@@ -181,7 +181,7 @@ def button2():
 
 
 def button3():
-    global button_3_pushed
+    global _button_3_pushed
     if button_3_pushed:
         button_3_pushed = False
         print("* Button 3 Pushed")
