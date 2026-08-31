@@ -25,11 +25,15 @@ Use sea level pressure at nearest airport
         * BM #3758  805.436 feet
         * BM #3757  777.465 feet
 
+463.894
+        * BM #3758  463.894 feet
+
 References:
     https://github.com/bradcar/MicroPython_BMPxxx
 
 """
 
+import logging
 import sys
 import time
 from datetime import datetime
@@ -37,10 +41,12 @@ from zoneinfo import ZoneInfo
 
 from barometer_utils import calc_sea_level_pressure
 from metric_imperial_utils import meters_to_feet, feet_to_meters
+from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
+from lib.pi_zero_utils import scan_i2c_bus
 
 # Import hardware instances & helpers directly from main_ws
 from main_ws import (
-    init_i2c_barameter_helper_for_calibration,
+    i2c_iniitialize_bmp585_bme680,
     metric_format,
     calc_altitude,
     encoder,  # Reusing initialized RotaryEncoder object
@@ -48,12 +54,21 @@ from main_ws import (
 )
 
 # Guess at adjustment: the corrections are calculated by what to add to hPa, so that is subtracted here
-INITIAL_SEA_LEVEL_PRESSURE = 1018.30 - (-1.12)
-INITIAL_SEA_LEVEL_PRESSURE = 1018.30
+INITIAL_SEA_LEVEL_PRESSURE = 1016.90 - (-1.12)
+INITIAL_SEA_LEVEL_PRESSURE = 1015.90
+
 
 MULTIPLIER_SMALL_STEP = 0.001
 MULTIPLIER_BIG_STEP = 1.0
 IS_METRIC = False
+
+
+# Logging options .INFO, .DEBUG
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 def write_slp_file(new_slp):
@@ -164,10 +179,12 @@ def run_calibration():
     initial_slp_hpa = INITIAL_SEA_LEVEL_PRESSURE
     is_metric = IS_METRIC
 
-    # Initialize Barometer using helper function
-    i2c_bus, bme, bmp = init_i2c_barameter_helper_for_calibration()
+    # Initialize Barometers
+    i2c1 = PiZeroI2CBridge("/dev/i2c-1")
+    scan_i2c_bus(i2c1)  # logging.INFO to display
+    bmp, bme, error_bmp585, error_bme680  = i2c_iniitialize_bmp585_bme680(i2c1)
 
-    # set SLP for both barometers
+    # Set SLP for both barometers
     bmp.sea_level_pressure = initial_slp_hpa
     bme.sea_level_pressure = initial_slp_hpa
 
@@ -178,7 +195,7 @@ def run_calibration():
     initial_bmp_hpa = bmp.pressure
     initial_bme_hpa = bme.pressure
 
-    print(f"Current SLP Baseline BMP585: {initial_slp_hpa:.4f} hPa\n")
+    print(f"\nCurrent SLP Baseline BMP585: {initial_slp_hpa:.4f} hPa\n")
 
     print(f"Initial BMP585 pressure BMP585: {initial_bmp_hpa:.4f} hPa")
     print(f"Initial BME680 pressure BME680: {initial_bme_hpa:.4f} hPa\n")
