@@ -57,6 +57,7 @@ from PIL import ImageFont
 from gpiozero import Button, RotaryEncoder
 
 from barometer_utils import calc_sea_level_pressure, bme_hpa_correction, calc_altitude
+from bme680 import BME680_I2C
 # from button_rotary_utils import process_inputs, check_rotary_switch_pressed
 from gps_utils import initialize_gps
 from lib.bme680 import BME680_I2C
@@ -66,11 +67,12 @@ from lib.eink_ssd1680_gt911_utils import init_eink_display, refresh_eink_display
     flush_touch_inputs, align_touch_point_to_display
 from lib.gps_utils import get_time_from_gps, get_map_string, get_lat_string, get_lon_string, set_pi_system_time_from_gps
 from lib.micropython_bmpxxx import bmpxxx
-from lib.pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 from lib.pi_zero_utils import pi_on_chip_temperature, scan_i2c_bus
 from metric_imperial_utils import feet_to_meters, metric_format, altitude_to_string
+from micropython_bmpxxx.bmpxxx import BMP585
+from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 
-INIT_SEA_LEVEL_PRESSURE = 1017.10
+INIT_SEA_LEVEL_PRESSURE = 1019.00
 
 DEBUG = True
 OVER_TEMP_WARNING = 70.0
@@ -102,11 +104,11 @@ def uname():
 # E-Ink button
 _last_touch_time = 0
 
-# Button 1: Cycle through display Summary and Details (GPIO 15)
+# Button 1: Cycle through display Summary and Details (GPIO 6)
 #           E-ink: "Down" Button: actually GPIO 5 NOT GPIO 6
 # Button 2: Adjust altitude/SLP (GPIO 5)
 #           E-ink: "Up" Button: actually GPIO 6 NOT GPIO 5
-# Button 3: cm/in toggle (GPIO 6)
+# Button 3: cm/in toggle (GPIO 16)
 # Button 4: <no physical pin, touch only> Oregon reference
 
 button_1 = Button(6, pull_up=True, bounce_time=0.05)
@@ -225,6 +227,58 @@ def button4():
         return True
     else:
         return False
+
+
+def i2c_iniitialize_bmp585_bme680(i2c1: PiZeroI2CBridge) -> tuple[BME680_I2C, BMP585, bool, bool]:
+    """
+    Initialize Barometers: BMP585, BME680
+
+    :param i2c1: PiZeroI2CBridge, typically created with  i2c1 = PiZeroI2CBridge("/dev/i2c-1")
+    :return:
+    bmp, bme, error_bmp585, error_bme680
+    """
+    error_bme680 = False
+    error_bmp585 = False
+    bme = None
+    bmp = None
+
+    try:
+        bme = BME680_I2C(i2c=i2c1, address=0x77)
+        print("BME680 initialized")
+    except Exception as e:
+        error_bme680 = True
+        print(f"ERROR: BME680 not initialized: {e}")
+
+    try:
+        bmp = bmpxxx.BMP585(i2c=i2c1, address=0x47)
+        bmp.pressure_oversample_rate = bmp.OSR128
+        bmp.temperature_oversample_rate = bmp.OSR8
+        bmp.iir_coefficient = bmp.COEF_7
+        print("BMP585 initialized")
+
+    except Exception as e:
+        error_bmp585 = True
+        print(f"ERROR: BMP585 not initialized: {e}")
+    return bmp, bme, error_bmp585, error_bme680
+
+
+def calibrate_bme_barometer(bme: BME680_I2C | None, bmp: BMP585 | None):
+    """ Calibrate BME680 using BMP585 Barometer as golden source """
+    average_diff = 1.0312750  # fallback hPa correction for BME680, if no BMP585
+    if bmp is not None and bme is not None:
+        average_diff = bme_hpa_correction(bme, bmp, 25)
+        print(f" * BMP585 calibration for BME680 = {average_diff:.7f} hPa")
+    elif bme is not None:
+        print(f" * No BMP585 to calibrate BME680, using default {average_diff:.7f} hPa")
+
+    # BME680 hPA amount over will be subtracted in calibration code.
+    bme.hpa_calibration = average_diff
+    if bme.hpa_calibration is not None:
+        print(f" * BME680 calibrated with = {average_diff:.7f} hPa")
+    else:
+        print(f" * ERROR IN BME680 hpa_calibration = None!")
+
+    print(" Barometers Initialization Done.")
 
 
 def display_list_names_values(altitude_data: list[tuple[str, str]], font_list, line_height: int,
@@ -667,30 +721,7 @@ def main():
 
     i2c1 = PiZeroI2CBridge("/dev/i2c-1")
     scan_i2c_bus(i2c1)
-
-    # Initialize Barometers: BMP585, BME680
-    error_bme680 = False
-    error_bmp585 = False
-    bme = None
-    bmp = None
-
-    try:
-        bme = BME680_I2C(i2c=i2c1, address=0x77)
-        print("BME680 initialized")
-    except Exception as e:
-        error_bme680 = True
-        print(f"ERROR: BME680 not initialized: {e}")
-
-    try:
-        bmp = bmpxxx.BMP585(i2c=i2c1, address=0x47)
-        bmp.pressure_oversample_rate = bmp.OSR128
-        bmp.temperature_oversample_rate = bmp.OSR8
-        bmp.iir_coefficient = bmp.COEF_7
-        print("BMP585 initialized")
-
-    except Exception as e:
-        error_bmp585 = True
-        print(f"ERROR: BMP585 not initialized: {e}")
+    bmp, bme, error_bmp585, error_bme680, = i2c_iniitialize_bmp585_bme680(i2c1)
 
     try:
         with open("last-sea-level-pressure.txt", "r") as data_file:
@@ -701,22 +732,8 @@ def main():
         print(f" * No previous sea level pressure stored in file")
         print(f" * Using program sea level pressure in constant ={sea_level_pressure:.2f}")
 
-    # Calibrate Barometers
-    average_diff = 1.0312750  # fallback hPa correction for BME680, if no BMP585
-    if bmp is not None and bme is not None:
-        average_diff = bme_hpa_correction(bme, bmp, 25)
-        print(f" * BMP585 calibration for BME680 = {average_diff:.7f} hPa")
-    elif bme is not None:
-        print(f" * No BMP585 to calibrate BME680, using default {average_diff:.7f} hPa")
-
-    # bme680 hPA amount over will be subtracted in calibration code.
-    bme.hpa_calibration = average_diff
-    if bme.hpa_calibration is not None:
-        print(f" * BME680 calibrated with = {average_diff:.7f} hPa")
-    else:
-        print(f" * ERROR IN BME680 hpa_calibration = None!")
-
-    print(" Barometers Initialization Done.")
+    # Calibrate BME Barometer
+    calibrate_bme_barometer(bme, bmp)
 
     # Start GPS, Pi Zero uses UART & pyserial library
     sys_meters = 0.0  # or None / default value
@@ -918,29 +935,6 @@ def main():
         # Loop duration is 50 ms to 60 ms
         # if DEBUG:
         #     print(f"Loop cycle duration: {loop_duration * 1000:.2f} ms")
-
-
-# HELPER FOR CALIBRATION ONLY
-def init_i2c_barameter_helper_for_calibration():
-    """Helper to initialize I2C bus and sensor objects."""
-    i2c1 = PiZeroI2CBridge("/dev/i2c-1")
-
-    bme = None
-    bmp = None
-    try:
-        bme = BME680_I2C(i2c=i2c1, address=0x77)
-    except Exception as e:
-        print(f"BME680 init error: {e}")
-
-    try:
-        bmp = bmpxxx.BMP585(i2c=i2c1, address=0x47)
-        bmp.pressure_oversample_rate = bmp.OSR128
-        bmp.temperature_oversample_rate = bmp.OSR8
-        bmp.iir_coefficient = bmp.COEF_7
-    except Exception as e:
-        print(f"BMP585 init error: {e}")
-
-    return i2c1, bme, bmp
 
 
 if __name__ == "__main__":
