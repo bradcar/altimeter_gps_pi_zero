@@ -21,6 +21,17 @@ Use sea level pressure at nearest airport
     * Portland updated hourly (7 min before the hour)
         https://www.weather.gov/wrh/timeseries?site=KPDX
 
+Buttons & Touch:
+The touch areas can be used as subsitutions for physical GPIO buttons
+    Button 1: Cycle through display Summary and Details
+              Upper left touch of display, or GPIO 6 (upper button if Adafruit E-ink 2.13" SSD1680)
+    Button 2: Adjust altitude/SLP (GPIO 5)
+              Upper left touch of display, or GPIO 5 (lower button if Adafruit E-ink 2.13" SSD1680)
+    Button 3: metric/Imperial toggle (GPIO 16)
+              upper right touch of display
+    Button 4: Oregon reference
+              lower right touch of display, no physical pin
+
 Display
     - Started with Adafruit E-ink 2.13" SSD1680
         It has no partial refresh
@@ -100,29 +111,66 @@ def uname():
     return [u.sysname, u.nodename, u.release, u.version, u.machine]
 
 
-# Buttons
-# E-Ink button
-_last_touch_time = 0
+# Unified button Physical and touch input handling
+_pending_button = None
+_last_gpio_input_time = 0.0
+_last_touch_input_time = 0.0
 
-# Button 1: Cycle through display Summary and Details (GPIO 6)
-#           E-ink: "Down" Button: actually GPIO 5 NOT GPIO 6
-# Button 2: Adjust altitude/SLP (GPIO 5)
-#           E-ink: "Up" Button: actually GPIO 6 NOT GPIO 5
-# Button 3: cm/in toggle (GPIO 16)
-# Button 4: <no physical pin, touch only> Oregon reference
+GPIO_DEBOUNCE_SEC = 0.35  # Debounce physical buttons
+TOUCH_DEBOUNCE_SEC = 0.35  # Touch gesture / e-ink timing window
 
+
+def trigger_button(button_num, source):
+    """
+    Convert a physical GPIO button or E-ink touch into one logical pending button event.
+    The input source determines debounce timing.
+    source: string to determine button or touch source
+    """
+    global _pending_button, _last_gpio_input_time, _last_touch_input_time
+    now = time.monotonic()
+
+    if source == "gpio":
+        if (now - _last_gpio_input_time) < GPIO_DEBOUNCE_SEC:
+            return
+        _last_gpio_input_time = now
+    elif source == "touch":
+        if (now - _last_touch_input_time) < TOUCH_DEBOUNCE_SEC:
+            return
+        _last_touch_input_time = now
+    else:
+        raise ValueError(f"Unknown button source: {source}")
+
+    _pending_button = button_num
+    print(f"* {source} accepted Button {button_num}")
+
+
+def get_button():
+    """ Return the pending button event and consume it. Returns None if no button is pending. """
+    global _pending_button
+    button = _pending_button
+    _pending_button = None
+    return button
+
+
+def clear_pending_button():
+    """ Flushes any queued pending button to prevent accidental double-execution across modes. """
+    global _pending_button
+    _pending_button = None
+
+
+# Physical Hardware Pins
 button_1 = Button(6, pull_up=True, bounce_time=0.05)
 button_2 = Button(5, pull_up=True, bounce_time=0.05)
 button_3 = Button(16, pull_up=True, bounce_time=0.05)
 
-# Rotary encoder: a = clk, b = DT, max_steps is be default +/-16 steps, 0 means unlimited
+# Physical GPIO Callbacks
+button_1.when_pressed = lambda: trigger_button(1, "gpio")
+button_2.when_pressed = lambda: trigger_button(2, "gpio")
+button_3.when_pressed = lambda: trigger_button(3, "gpio")
+
+# Rotary encoder: a = clk, b = DT, max_steps is by default +/-16 steps, 0 means unlimited
 encoder = RotaryEncoder(a=21, b=13, max_steps=0, bounce_time=0.005)
 rotary_switch = Button(19, pull_up=True, bounce_time=0.05)
-
-_button_1_pushed = False
-_button_2_pushed = False
-_button_3_pushed = False
-_button_4_pushed = False
 
 # Initialize the SSD1680 E-ink hardware & Pillow canvas
 # TODO Add timeout from pi_zero_utils.py
@@ -143,90 +191,27 @@ except IOError:
     font_biggest = ImageFont.load_default()
 
 
-# Mimic MicroPython millisecond timers
-def ticks_ms():
-    return int(time.monotonic() * 1000)
+def check_touch_buttons(rotation: int = DISPLAY_ROTATION):
+    """
+    Checks GT911 touch inputs using aligned display coordinates.
+    """
+    touch_data = check_touch_inputs(rotation=rotation)
+    if not touch_data:
+        return
 
+    touch = touch_data[0]
+    y, x = align_touch_point_to_display(touch, rotation=rotation)
 
-def ticks_diff(t1, t2):
-    return t1 - t2
+    # Flush GT911 touch hardware buffer immediately after fetching active touch point
+    flush_touch_inputs()
 
-
-def sleep_ms(ms):
-    time.sleep(ms / 1000.0)
-
-
-time.sleep_ms = sleep_ms
-
-debounce_1_time = 0
-debounce_2_time = 0
-debounce_3_time = 0
-
-
-def button_3_handler():
-    global _button_3_pushed, debounce_3_time
-    if (ticks_ms() - debounce_3_time) > 250:
-        _button_3_pushed = True
-        debounce_3_time = ticks_ms()
-
-
-def button_2_handler():
-    global _button_2_pushed, debounce_2_time
-    if (ticks_ms() - debounce_2_time) > 250:
-        _button_2_pushed = True
-        debounce_2_time = ticks_ms()
-
-
-def button_1_handler():
-    global _button_1_pushed, debounce_1_time
-    if (ticks_ms() - debounce_1_time) > 250:
-        _button_1_pushed = True
-        debounce_1_time = ticks_ms()
-
-
-button_1.when_pressed = button_1_handler
-button_2.when_pressed = button_2_handler
-button_3.when_pressed = button_3_handler
-
-
-def button1():
-    global _button_1_pushed
-    if _button_1_pushed:
-        _button_1_pushed = False
-        print("* Button 1 Pushed")
-        return True
+    # Quadrant Evaluation
+    if y <= 125:
+        button_num = 1 if x <= 61 else 2
     else:
-        return False
+        button_num = 3 if x <= 61 else 4
 
-
-def button2():
-    global _button_2_pushed
-    if _button_2_pushed:
-        _button_2_pushed = False
-        print("* Button 2 Pushed")
-        return True
-    else:
-        return False
-
-
-def button3():
-    global _button_3_pushed
-    if _button_3_pushed:
-        _button_3_pushed = False
-        print("* Button 3 Pushed")
-        return True
-    else:
-        return False
-
-
-def button4():
-    global _button_4_pushed
-    if _button_4_pushed:
-        _button_4_pushed = False
-        print("* Button 4 Pushed")
-        return True
-    else:
-        return False
+    trigger_button(button_num, "touch")
 
 
 def i2c_iniitialize_bmp585_bme680(i2c1: PiZeroI2CBridge) -> tuple[BME680_I2C, BMP585, bool, bool]:
@@ -336,15 +321,26 @@ def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pres
     print(f"Adjustment start: alt = {new_alt:.3f} m")
     need_redraw = True
 
-    while not button2():
+    # Clear left-over button presses before starting calibration loop
+    clear_pending_button()
+
+    while True:
+        # Check GT911 touch and Retrieve next queued button press (from physical GPIO or touch)
         check_touch_buttons()
+        button_state = get_button()
+
+        # Button 2: Save / Exit calibration mode
+        if button_state == 2:
+            clear_pending_button()
+            return new_slp
+
+        # Button 3: Toggle metric / imperial units
+        elif button_state == 3:
+            is_metric = not is_metric
+            need_redraw = True
 
         if gps is not None:
             gps.update()
-
-        if button3():
-            is_metric = not is_metric
-            need_redraw = True
 
         if rotary_switch.is_pressed:
             rotary_multiplier = multiplier_big_step if rotary_multiplier == multiplier_small_step else multiplier_small_step
@@ -376,14 +372,6 @@ def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pres
             need_redraw = False
 
         time.sleep(0.03)
-
-    try:
-        with open("last-sea-level-pressure.txt", "w") as data_file:
-            data_file.write(f"{new_slp:.2f}")
-    except Exception as e:
-        print(f"Failed to save Sea Level Pressure (SLP) to file: {e}")
-
-    return new_slp
 
 
 def display_updated_altitude_calibration(alt, press, is_metric, partial=False):
@@ -650,62 +638,6 @@ def gps_clock_string(gps: GPS, time_zone_hours: int):
     return time_string
 
 
-def check_touch_buttons(rotation: int = DISPLAY_ROTATION):
-    """
-    Checks GT911 touch inputs using aligned display coordinates.
-
-    Coordinate System:
-    - y: Display Width / Horizontal Axis  (0 to 249, Left to Right)
-    - x: Display Height / Vertical Axis   (0 to 121, Top to Bottom)
-
-    Display/Touch Zones:
-    - Upper Left  (y <= 125, x <= 61) -> Button 1 (Display Mode Toggle)
-    - Lower Left  (y <= 125, x >  61) -> Button 2 (Altitude / SLP Calibration)
-    - Upper Right (y >  125, x <= 61) -> Button 3 (Metric / Imperial Unit Toggle)
-    - Lower Right (y >  125, x >  61) -> Reserved Area
-    """
-
-    global _button_1_pushed, _button_2_pushed, _button_3_pushed, _button_4_pushed, _last_touch_time
-
-    current_time = time.monotonic()
-
-    # Guard: Do NOT pull from GT911 if inside the lockout window
-    if (current_time - _last_touch_time) < TOUCH_DEBOUNCE_SEC:
-        # Purge any extra hardware samples accumulating in buffer during lockout
-        flush_touch_inputs()
-        return None
-
-    # Fetch fresh touch inputs from GT911
-    touch_data = check_touch_inputs(rotation=rotation)
-    if not touch_data:
-        return None
-
-    touch = touch_data[0]
-
-    # Align coordinates using the standardized utility mapper (y = Width, x = Height)
-    y, x = align_touch_point_to_display(touch, rotation=rotation)
-
-    # Quadrant Evaluation
-    if y <= 125:
-        if x <= 61:
-            print(f"* Touch Upper Left (Y={y}, X={x}) -> Trigger Button 1")
-            _button_1_pushed = True
-        else:
-            print(f"* Touch Lower Left (Y={y}, X={x}) -> Trigger Button 2")
-            _button_2_pushed = True
-    else:
-        if x <= 61:
-            print(f"* Touch Upper Right (Y={y}, X={x}) -> Trigger Button 3")
-            _button_3_pushed = True
-        else:
-            print(f"* Touch Lower Right (Y={y}, X={x}) -> Reserved Area")
-            _button_4_pushed = True
-
-    # Timestamp AND immediately flush touch buffers
-    _last_touch_time = current_time
-    flush_touch_inputs()
-
-
 def main():
     global i2c1, sea_level_pressure, slp_hpa_bmp585, slp_hpa_bme680, sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric
 
@@ -782,37 +714,45 @@ def main():
         # Check touch quadrant inputs
         check_touch_buttons()
 
+        # Consume queued button press (from either physical GPIO or touch GT911)
+        button_state = get_button()
         force_eink_update = False
 
-        # Button 1: Display Mode Toggle (Big Dashboard -> Barometer Details -> GPS Details)
-        if button1():
-            display_mode = (display_mode + 1) % 3
-            print(f"* Switched to Display Mode: {display_mode}")
-            force_eink_update = True
-            eink_partial_refresh_count = 0
+        if button_state is not None:
+            # Button 1: Display Mode Toggle (Big Dashboard -> Barometer Details -> GPS Details)
+            if button_state == 1:
+                display_mode = (display_mode + 1) % 3
+                print(f"* Switched to Display Mode: {display_mode}")
+                force_eink_update = True
+                eink_partial_refresh_count = 0
 
-        # Button 2: Altitude/SLP Calibration
-        if button2():
-            sea_level_pressure = adjust_altitude_slp(
-                gps=gps,
-                is_metric=is_metric,
-                altitude_m=sys_meters,
-                pressure_hpa=sys_hpa,
-                sea_level_pressure_hpa=sea_level_pressure,
-            )
-            force_eink_update = True
-            eink_partial_refresh_count = 0
+            # Button 2: Altitude/SLP Calibration Mode
+            elif button_state == 2:
+                sea_level_pressure = adjust_altitude_slp(
+                    gps=gps,
+                    is_metric=is_metric,
+                    altitude_m=sys_meters,
+                    pressure_hpa=sys_hpa,
+                    sea_level_pressure_hpa=sea_level_pressure,
+                )
+                # Flush residual buttons/touch queued this processing
+                clear_pending_button()
+                force_eink_update = True
+                eink_partial_refresh_count = 0
 
-        # Button 3: Unit toggle
-        if button3():
-            is_metric = not is_metric
-            force_eink_update = True
-            eink_partial_refresh_count = 0
+            # Button 3: Metric / Imperial Unit Toggle
+            elif button_state == 3:
+                is_metric = not is_metric
+                force_eink_update = True
+                eink_partial_refresh_count = 0
 
-        if button4():
-            display_altitude_reference(is_metric)
-            force_eink_update = True
-            eink_partial_refresh_count = 0
+            # Button 4: Oregon Altitude Reference Screen
+            elif button_state == 4:
+                display_altitude_reference(is_metric)
+                # Clear pending inputs so touch inputs during modal display don't trigger actions upon return
+                clear_pending_button()
+                force_eink_update = True
+                eink_partial_refresh_count = 0
 
         # Barometer, Temperature, humidity, IAQ (Every 2 seconds)
         if (current_time - last_sensor_time) >= SENSOR_INTERVAL_SEC or first_run:
