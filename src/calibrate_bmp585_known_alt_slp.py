@@ -22,11 +22,16 @@ Use sea level pressure at nearest airport
 
     Sylvan Hill
         https://www.portlandmaps.com/detail/benchmarks/-13662910.76695894_5701969.972378978_xy/
-        * BM #3758  805.436 feet
-        * BM #3757  777.465 feet
+        * BM #3758  805.436 feet (** firestation)
+        * BM #3757  777.465 feet (on-ramp east bound)
 
-463.894
         * BM #3758  463.894 feet
+
+
+    Hawthorne Nevada
+    Hawthorne Industrial Airport, NV (ASOS/AWOS - REV)
+    Station Elev: 4230.0 ft; Lat/Lon: 38.54482/-118.63137
+    https://www.weather.gov/wrh/timeseries?site=KHTH
 
 References:
     https://github.com/bradcar/MicroPython_BMPxxx
@@ -46,16 +51,24 @@ from lib.pi_zero_utils import scan_i2c_bus
 
 # Import hardware instances & helpers directly from main_ws
 from main_ws import (
-    i2c_iniitialize_bmp585_bme680,
+    i2c_initialize_bmp585_bme680,
     metric_format,
     calc_altitude,
     encoder,  # Reusing initialized RotaryEncoder object
     rotary_switch,  # Reusing initialized Button object
 )
 
+# *** BM  # 3758  805.436 feet (** fire station)
+PDX_STATION_HPA = 1011.12
+PDX_STATION_FEET = 20.0
+
+
+FALLBACK_SEA_LEVEL_PRESSURE = 1019.00
+
 # Guess at adjustment: the corrections are calculated by what to add to hPa, so that is subtracted here
 INITIAL_SEA_LEVEL_PRESSURE = 1016.90 - (-1.12)
 INITIAL_SEA_LEVEL_PRESSURE = 1015.90
+
 
 
 MULTIPLIER_SMALL_STEP = 0.001
@@ -176,13 +189,21 @@ def run_calibration():
     timestamp = datetime.now(ZoneInfo("America/Los_Angeles")).isoformat()
     print(f"Timestamp: {timestamp}\n")
 
-    initial_slp_hpa = INITIAL_SEA_LEVEL_PRESSURE
+    initial_slp_hpa = FALLBACK_SEA_LEVEL_PRESSURE
+
+
+    # calculate SLP based on nearest airport
+    local_airport_hpa = PDX_STATION_HPA
+    local_airport_meters = feet_to_meters(PDX_STATION_FEET)
+
+    initial_slp_hpa = calc_sea_level_pressure (local_airport_hpa, local_airport_meters)
+
     is_metric = IS_METRIC
 
     # Initialize Barometers
     i2c1 = PiZeroI2CBridge("/dev/i2c-1")
     scan_i2c_bus(i2c1)  # logging.INFO to display
-    bmp, bme, error_bmp585, error_bme680  = i2c_iniitialize_bmp585_bme680(i2c1)
+    bmp, bme, error_bmp585, error_bme680  = i2c_initialize_bmp585_bme680(i2c1)
 
     # Set SLP for both barometers
     bmp.sea_level_pressure = initial_slp_hpa
