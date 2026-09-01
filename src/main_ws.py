@@ -410,9 +410,9 @@ def print_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_
         barometer_string = f"{pressure_hpa:.2f} hPa"
         temperature_string = f"{temp_c:.1f}° C"
     else:
-        barometer_string = f"{pressure_hpa * 0.02953:.2f}\""
+        barometer_string = f"{pressure_hpa * 0.02953:.2f}\"  ({pressure_hpa:.2f} hPa)"
         temp_f = (temp_c * 9.0 / 5.0) + 32.0
-        temperature_string = f"{temp_f:.1f}° F"
+        temperature_string = f"{temp_f:.1f}° F  ({temp_c:.1f}° C)"
     humidity_string = f"{humidity:.1f}%" if humidity is not None else "No Data"
     iaq_string = f"{iaq:.0f} ({iaq_quality_to_string(iaq)})" if iaq is not None else "No Data"
 
@@ -603,7 +603,7 @@ def print_gps_metrics(gps: GPS, time_zone_hours: int):
         else:
             accuracy_string = "accuracy unknown"
 
-        print(f"Map string: {map_string} ({accuracy_string})")
+        print(f"Map string: {map_string}  (accuracy: {accuracy_string})")
     else:
         print("GPS: Waiting for satellite fix...")
 
@@ -612,7 +612,7 @@ def print_gps_metrics(gps: GPS, time_zone_hours: int):
             est_altitude_string = f"+/- {gps.vdop * 4:.1f}m"
         else:
             est_altitude_string = "N/A (Waiting for data)"
-        print(f"Altitude: {gps.altitude_m} meters ({est_altitude_string})")
+        print(f"Altitude: {gps.altitude_m} meters  (accuracy: {est_altitude_string})")
 
     if gps.speed_knots is not None:
         print(f"Speed: {gps.speed_knots * 1.15078:.1f} mph")
