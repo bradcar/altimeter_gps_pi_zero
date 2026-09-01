@@ -7,11 +7,23 @@ from micropython_bmpxxx.bmpxxx import BMP585
 
 
 def calc_sea_level_pressure(hpa, meters):
+    """
+    Calculate sea level pressure from pressure and elevation.
+    :param hpa:
+    :param meters:
+    :return: sea_level_pressure
+    """
     sea_level_pressure = hpa / (1.0 - (meters / 44330.77)) ** (1 / 0.1902632)
     return sea_level_pressure
 
 
 def calc_altitude(hpa, sea_level_pressure):
+    """
+    Calculate altitude from pressure and sea level pressure.
+    :param hpa:
+    :param sea_level_pressure:
+    :return: altitude in meters
+    """
     meters = 44330.77 * (1.0 - (hpa / sea_level_pressure) ** 0.1902632)
     return meters
 
