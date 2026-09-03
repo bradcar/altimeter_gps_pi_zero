@@ -59,10 +59,28 @@ AIRPORTS:
     Station Elev: 4230.0 ft; Lat/Lon: 38.54482/-118.63137
     https://www.weather.gov/wrh/timeseries?site=KHTH
 
+    Buttons & Touch:
+
+    Two paths
+     * Physical GPIO Buttons / Rotary
+       - GPIO 5, 6, 16)
+       - trigger_button (num, "gpio")
+       - 100ms Debounce
+
+     * Waveshare GT911 Touch Screen
+       - I2C Bus + SPI E-Paper
+       - check_touch_buttons()
+       - 250ms Debounce
+
+     Then goes to
+     1. _pending_button (Queue)
+     2. get_button()
+     3. main() Processing Loop
+
+
 TODOS
     * TOdo why is Reading sensors @ 198.66s 	12:24:06 (clock wrong)
     * todo add warning the GPS altitude is diff than barometer
-    * TODO Add short tap in center of E-Ink to force display refresh
     * TODO test with other E-Ink display to minimize code overlap
     * TODO clean up library headers
     * TODO move E-Ink setup into main?
@@ -80,7 +98,6 @@ from PIL import ImageFont
 from gpiozero import Button, RotaryEncoder
 
 from barometer_utils import calc_sea_level_pressure, bme_hpa_correction, calc_altitude
-from bme680 import BME680_I2C
 # from button_rotary_utils import process_inputs, check_rotary_switch_pressed
 from gps_utils import initialize_gps
 from lib.bme680 import BME680_I2C
@@ -96,15 +113,21 @@ from micropython_bmpxxx.bmpxxx import BMP585
 from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 
 # Portland OR, PDX
-PDX_STATION_HPA = 1010.78
+PDX_STATION_STRING = "PDX - Portland, OR"
+PDX_STATION_HPA = 1009.43
 PDX_STATION_FEET = 20.
 
-#Hawthorne NV, HTH
+# big change night
+# Altitude: 471.295'  (143.651m).  Barometer: 29.38"  (995.05 hPa). PDX_STATION_HPA = 1010.78
+# Altitude: 351.643'  (107.181m).  Barometer: 29.38"  (995.03 hPa). PDX_STATION_HPA = 1006.38
+
+#Altitude: 348.288'  (106.158m)  Barometer: 29.46"  (997.49 hPa)
+
+# Hawthorne NV, HTH
 HTH_STATION_HPA = 870.00
 HTH_STATION_FEET = 4230.
 
 FALLBACK_SEA_LEVEL_PRESSURE = 1019.00
-
 
 DEBUG = True
 OVER_TEMP_WARNING = 70.0
@@ -214,7 +237,7 @@ except IOError:
 
 def check_touch_buttons(rotation: int = DISPLAY_ROTATION):
     """
-    Checks GT911 touch inputs using aligned display coordinates.
+    Checks GT911 touch inputs using aligned display coordinates. y=[0,250], x [0,122]
 
              y <= 125    y > 125
             +----------+----------+
@@ -233,10 +256,10 @@ def check_touch_buttons(rotation: int = DISPLAY_ROTATION):
     flush_touch_inputs()
 
     # Touch quadrant evaluation
-    if y <= 125:
-        button_num = 1 if x <= 61 else 2
+    if x <= 61:
+        button_num = 1 if y <= 125 else 3
     else:
-        button_num = 3 if x <= 61 else 4
+        button_num = 2 if y <= 125 else 4
 
     trigger_button(button_num, "touch")
 
@@ -291,50 +314,6 @@ def calibrate_bme_barometer(bme: BME680_I2C | None, bmp: BMP585 | None):
         print(f" * ERROR IN BME680 hpa_calibration = None!")
 
     print(" Barometers Initialization Done.")
-
-
-def display_list_names_values(altitude_data: list[tuple[str, str]], font_list, line_height: int,
-                              start_y: int, left_margin_x: int, right_align_x: int):
-    """ Display a list of names and values """
-    for index, (location, elevation) in enumerate(altitude_data):
-        current_y = start_y + (index * line_height)
-
-        epd_draw.text((left_margin_x, current_y), location, font=font_list, fill=0)
-
-        # Right align text
-        text_width = font_small.getlength(elevation)
-        elevation_x = right_align_x - text_width
-        epd_draw.text((elevation_x, current_y), elevation, font=font_list, fill=0)
-
-
-def display_altitude_reference(is_metric, partial=False):
-    epd_draw.rectangle((0, 0, 250, 122), fill=255)
-
-    epd_draw.text((3, 5), "Oregon Altitude Reference", font=font_small, fill=0)
-    epd_draw.line((5, 21, 250, 21), fill=0, width=1)
-
-    altitude_data = [
-        ("Garage:", altitude_to_string(feet_to_meters(339), 0, is_metric)),
-        ("Sylvan On-ramp:", altitude_to_string(feet_to_meters(761), 0, is_metric)),
-        ("Meadows Main:", altitude_to_string(feet_to_meters(5003), 0, is_metric)),
-        ("Meadows HRM:", altitude_to_string(feet_to_meters(4540), 0, is_metric)),
-        ("Bachelor Main:", altitude_to_string(feet_to_meters(6207), 0, is_metric)),
-        ("Rock Gym Beav:", altitude_to_string(feet_to_meters(122), 0, is_metric)),
-    ]
-
-    font_list = font_small
-    start_y = 25
-    line_height = 16
-    if is_metric:
-        left_margin_x = 25
-        right_align_x = 225
-    else:
-        left_margin_x = 29
-        right_align_x = 216
-
-    display_list_names_values(altitude_data, font_list, line_height, start_y, left_margin_x, right_align_x)
-    refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
-    time.sleep(5)
 
 
 def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pressure_hpa):
@@ -402,6 +381,50 @@ def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pres
         time.sleep(0.03)
 
 
+def display_list_names_values(altitude_data: list[tuple[str, str]], font_list, line_height: int,
+                              start_y: int, left_margin_x: int, right_align_x: int):
+    """ Display a list of names and values """
+    for index, (location, elevation) in enumerate(altitude_data):
+        current_y = start_y + (index * line_height)
+
+        epd_draw.text((left_margin_x, current_y), location, font=font_list, fill=0)
+
+        # Right align text
+        text_width = font_small.getlength(elevation)
+        elevation_x = right_align_x - text_width
+        epd_draw.text((elevation_x, current_y), elevation, font=font_list, fill=0)
+
+
+def display_altitude_reference(is_metric, partial=False):
+    epd_draw.rectangle((0, 0, 250, 122), fill=255)
+
+    epd_draw.text((3, 5), "Oregon Altitude Reference", font=font_small, fill=0)
+    epd_draw.line((5, 21, 250, 21), fill=0, width=1)
+
+    altitude_data = [
+        ("Garage:", altitude_to_string(feet_to_meters(339), 0, is_metric)),
+        ("Sylvan On-ramp:", altitude_to_string(feet_to_meters(761), 0, is_metric)),
+        ("Meadows Main:", altitude_to_string(feet_to_meters(5003), 0, is_metric)),
+        ("Meadows HRM:", altitude_to_string(feet_to_meters(4540), 0, is_metric)),
+        ("Bachelor Main:", altitude_to_string(feet_to_meters(6207), 0, is_metric)),
+        ("Rock Gym Beav:", altitude_to_string(feet_to_meters(122), 0, is_metric)),
+    ]
+
+    font_list = font_small
+    start_y = 25
+    line_height = 16
+    if is_metric:
+        left_margin_x = 25
+        right_align_x = 225
+    else:
+        left_margin_x = 29
+        right_align_x = 216
+
+    display_list_names_values(altitude_data, font_list, line_height, start_y, left_margin_x, right_align_x)
+    refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
+    time.sleep(5)
+
+
 def display_updated_altitude_calibration(alt, press, is_metric, partial=False):
     """
     Renders current calibration values to E-Ink display.
@@ -454,7 +477,7 @@ def print_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_
 
 
 def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric, is_final=False,
-                              partial=False):
+                              full_refresh=False):
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
     if not is_final:
         epd_draw.text((3, 3), "Altimeter Details", font=font_small, fill=0)
@@ -497,124 +520,7 @@ def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, i
         left_margin_x = 16
         right_align_x = 209
     display_list_names_values(sensor_data, font_list, line_height, start_y, left_margin_x, right_align_x)
-    refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
-
-
-def display_gps_details(gps, partial=False):
-    """
-    display GPS details on screen, protect for None values
-
-    """
-    if gps is not None:
-        epd_draw.rectangle((0, 0, 250, 122), fill=255)
-
-        # Show header with number of Satellites & quality
-        sats = gps.satellites if gps.satellites is not None else 0
-        qual = gps.fix_quality if gps.fix_quality is not None else 0
-        if gps.has_fix:
-            epd_draw.text((3, 2), f"GPS    ({sats} sats, q={qual})", font=font_small, fill=0)
-        else:
-            epd_draw.text((3, 2), "GPS", font=font_small, fill=0)
-            epd_draw.text((45, 0), "** NO FIX **", font=font_medium, fill=0)
-
-        clock_string = time.strftime("%I:%M %p", time.localtime()).lower()
-        clock_width = font_small.getlength(clock_string)
-        epd_draw.text((250 - clock_width, 2), clock_string, font=font_small, fill=0)
-        epd_draw.line((5, 21, 250, 21), fill=0, width=1)
-
-        # List of GPS metrics
-        accuracy_str = f"+/- {gps.vdop * 4:.1f}m" if gps.vdop is not None else "N/A"
-        alt_str = f"{gps.altitude_m:.1f}m" if gps.altitude_m is not None else "N/A"
-        speed_str = f"{gps.speed_knots * 1.15078:.1f} mph" if gps.speed_knots is not None else "0.0 mph"
-
-        sensor_data = [
-            ("Lat", get_lat_string(gps)),
-            ("Long", get_lon_string(gps)),
-            ("Accuracy", accuracy_str),
-            ("Altitude", alt_str),
-            ("Speed", speed_str),
-        ]
-
-        font_list = font_medium
-        start_y = 25
-        line_height = 18
-        left_margin_x = 2
-        right_align_x = 210
-        display_list_names_values(sensor_data, font_list, line_height, start_y, left_margin_x, right_align_x)
-        refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
-        flush_touch_inputs()
-
-
-def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, is_metric, partial=False):
-    """
-    Display main dashboard
-    """
-    epd_draw.rectangle((0, 0, 250, 122), fill=255)
-
-    # title
-    # epd_draw.text((1, 5), "Altimeter & GPS", font=font_small, fill=0)
-
-    convert, unit = metric_format(is_metric)
-    if is_metric:
-        alt_string = f"{altitude_m * convert:.1f}"
-        long_alt_num_width = font_biggest.getlength("9999.9")
-    else:
-        alt_string = f"{altitude_m * convert:.1f}"
-        long_alt_num_width = font_biggest.getlength("99999.9")
-
-    alt_num_width = font_biggest.getlength(alt_string)
-    alt_metric_string = f"{unit}"
-    press_string = f"{pressure_hpa:.2f}"
-    press_num_width = font_biggest.getlength(press_string)
-    press_metric_string = f"hpa"
-
-    epd_draw.text((2, 19), f"Alt", font=font_small, fill=0)
-    epd_draw.text((36 + long_alt_num_width - alt_num_width, 0), alt_string, font=font_biggest, fill=0)
-
-    if is_metric:
-        epd_draw.text((28 + long_alt_num_width, 25), alt_metric_string, font=font_medium, fill=0)
-    else:
-        epd_draw.text((28 + 2 + long_alt_num_width, 0), "'", font=font_biggest, fill=0)
-
-    epd_draw.text((2, 60), f"hPa", font=font_small, fill=0)
-    epd_draw.text((36, 41), press_string, font=font_biggest, fill=0)
-    # epd_draw.text((35 + press_num_width + 3, 41 + 9), press_metric_string, font=font_medium, fill=0)
-
-    if gps is not None:
-        if gps.latitude is not None and gps.longitude is not None:
-            if gps.has_fix:
-                # epd_draw.text((2, 97), f"GPS", font=font_small, fill=0)
-                epd_draw.text((2, 90), f"GPS", font=font_small, fill=0)
-                sats = gps.satellites if gps.satellites is not None else 0
-                epd_draw.text((2, 104), f"{sats} sats", font=font_small, fill=0)
-            else:
-                epd_draw.text((2, 90), f"Last", font=font_small, fill=0)
-                epd_draw.text((2, 104), f"Fix", font=font_small, fill=0)
-
-            lat_string = get_lat_string(gps)
-            lon_string = get_lon_string(gps)
-            lat_str_width = font_medium.getlength(lat_string)
-            lon_str_width = font_medium.getlength(lon_string)
-            lon_lat_diff = (lon_str_width - lat_str_width)
-            epd_draw.text((64 + lon_lat_diff - 5, 86), lat_string, font=font_medium, fill=0)
-            epd_draw.text((64, 104), lon_string, font=font_medium, fill=0)
-        else:
-            epd_draw.text((55, 95), "Acquiring GPS", font=font_medium, fill=0)
-    else:
-        epd_draw.text((55, 95), "NO GPS Sensor", font=font_medium, fill=0)
-
-    # Display IAQ warning box, if poor or worse at bottom right of big display 0 mode
-    if iaq and iaq > 100.0:
-        epd_draw.rectangle((206, 90, 250, 122), fill=0)
-        if iaq >= 200.0:
-            epd_draw.text((216, 90), "vile", font=font_small, fill=255)
-        elif iaq >= 150.0:
-            epd_draw.text((214, 90), "bad", font=font_small, fill=255)
-        elif iaq >= 100.0:
-            epd_draw.text((209, 90), "poor", font=font_small, fill=255)
-        epd_draw.text((210, 104), "IAQ !", font=font_small, fill=255)
-
-    refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
+    refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
 
 
 def print_gps_metrics(gps: GPS, time_zone_hours: int):
@@ -671,6 +577,130 @@ def gps_clock_string(gps: GPS, time_zone_hours: int):
     return time_string
 
 
+def display_gps_details(gps, last_gps_fix_time, full_refresh=False):
+    """
+    display GPS details on screen, protect for None values
+    """
+    if gps is not None:
+        epd_draw.rectangle((0, 0, 250, 122), fill=255)
+
+        # Show header with number of Satellites & quality
+        sats = gps.satellites if gps.satellites is not None else 0
+        qual = gps.fix_quality if gps.fix_quality is not None else 0
+        if gps.has_fix:
+            epd_draw.text((3, 2), f"GPS    ({sats} sats, q={qual})", font=font_small, fill=0)
+        else:
+            epd_draw.text((3, 2), "GPS", font=font_small, fill=0)
+            if last_gps_fix_time is None:
+                epd_draw.text((45, 0), "** NO FIX **", font=font_medium, fill=0)
+            else:
+                minutes_since_fix = int((time.monotonic() - last_gps_fix_time) / 60)
+                epd_draw.text((45, 0), f"** NO FIX in {minutes_since_fix}min **", font=font_medium, fill=0)
+
+        clock_string = time.strftime("%I:%M %p", time.localtime()).lower()
+        clock_width = font_small.getlength(clock_string)
+        epd_draw.text((250 - clock_width, 2), clock_string, font=font_small, fill=0)
+        epd_draw.line((5, 21, 250, 21), fill=0, width=1)
+
+        # List of GPS metrics
+        accuracy_str = f"+/- {gps.vdop * 4:.1f}m" if gps.vdop is not None else "N/A"
+        alt_str = f"{gps.altitude_m:.1f}m" if gps.altitude_m is not None else "N/A"
+        speed_str = f"{gps.speed_knots * 1.15078:.1f} mph" if gps.speed_knots is not None else "0.0 mph"
+
+        sensor_data = [
+            ("Lat", get_lat_string(gps)),
+            ("Long", get_lon_string(gps)),
+            ("Accuracy", accuracy_str),
+            ("Altitude", alt_str),
+            ("Speed", speed_str),
+        ]
+
+        font_list = font_medium
+        start_y = 25
+        line_height = 18
+        left_margin_x = 2
+        right_align_x = 210
+        display_list_names_values(sensor_data, font_list, line_height, start_y, left_margin_x, right_align_x)
+        refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
+        flush_touch_inputs()
+
+
+def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, last_gps_fix_time, is_metric, full_refresh=False):
+    """
+    Display main dashboard
+    :param last_gps_fix_time: Timestamp (monotonic) of last valid GPS fix
+    """
+    epd_draw.rectangle((0, 0, 250, 122), fill=255)
+
+    # title
+    # epd_draw.text((1, 5), "Altimeter & GPS", font=font_small, fill=0)
+
+    convert, unit = metric_format(is_metric)
+    if is_metric:
+        alt_string = f"{altitude_m * convert:.1f}"
+        long_alt_num_width = font_biggest.getlength("9999.9")
+    else:
+        alt_string = f"{altitude_m * convert:.1f}"
+        long_alt_num_width = font_biggest.getlength("99999.9")
+
+    alt_num_width = font_biggest.getlength(alt_string)
+    alt_metric_string = f"{unit}"
+    press_string = f"{pressure_hpa:.2f}"
+
+    epd_draw.text((2, 19), "Alt", font=font_small, fill=0)
+    epd_draw.text((36 + long_alt_num_width - alt_num_width, 0), alt_string, font=font_biggest, fill=0)
+
+    if is_metric:
+        epd_draw.text((28 + long_alt_num_width, 25), alt_metric_string, font=font_medium, fill=0)
+    else:
+        epd_draw.text((28 + 2 + long_alt_num_width, 0), "'", font=font_biggest, fill=0)
+
+    epd_draw.text((2, 60), "hPa", font=font_small, fill=0)
+    epd_draw.text((36, 41), press_string, font=font_biggest, fill=0)
+
+    if gps is not None:
+        if gps.latitude is not None and gps.longitude is not None:
+            if gps.has_fix:
+                epd_draw.text((2, 90), "GPS", font=font_small, fill=0)
+                sats = gps.satellites if gps.satellites is not None else 0
+                epd_draw.text((2, 104), f"{sats} sats", font=font_small, fill=0)
+            else:
+                if last_gps_fix_time is not None and last_gps_fix_time > 0:
+                    minutes_since_fix = int((time.monotonic() - last_gps_fix_time) / 60)
+                    min_str = f"({minutes_since_fix}min)"
+                else:
+                    min_str = "(--min)"
+
+                epd_draw.text((2, 90), "Last Fix", font=font_small, fill=0)
+                epd_draw.text((2, 104), min_str, font=font_small, fill=0)
+
+            lat_string = get_lat_string(gps)
+            lon_string = get_lon_string(gps)
+            lat_str_width = font_medium.getlength(lat_string)
+            lon_str_width = font_medium.getlength(lon_string)
+            lon_lat_diff = (lon_str_width - lat_str_width)
+            epd_draw.text((64 + lon_lat_diff - 5, 86), lat_string, font=font_medium, fill=0)
+            epd_draw.text((64, 104), lon_string, font=font_medium, fill=0)
+        else:
+            epd_draw.text((55, 95), "Acquiring GPS", font=font_medium, fill=0)
+    else:
+        epd_draw.text((55, 95), "NO GPS Sensor", font=font_medium, fill=0)
+
+    # Display IAQ warning box, if poor or worse at bottom right of big display 0 mode
+    if iaq and iaq > 100.0:
+        epd_draw.rectangle((206, 90, 250, 122), fill=0)
+        if iaq >= 200.0:
+            epd_draw.text((216, 90), "vile", font=font_small, fill=255)
+        elif iaq >= 150.0:
+            epd_draw.text((214, 90), "bad", font=font_small, fill=255)
+        elif iaq >= 100.0:
+            epd_draw.text((209, 90), "poor", font=font_small, fill=255)
+        epd_draw.text((210, 104), "IAQ !", font=font_small, fill=255)
+
+    refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
+
+
+# Main ============================================================================
 def main():
     global i2c1, sea_level_pressure, slp_hpa_bmp585, slp_hpa_bme680, sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric
 
@@ -691,11 +721,18 @@ def main():
     sea_level_pressure = FALLBACK_SEA_LEVEL_PRESSURE
 
     # calculate SLP based on nearest airport
+    local_airport_string = PDX_STATION_STRING
     local_airport_hpa = PDX_STATION_HPA
     local_airport_meters = feet_to_meters(PDX_STATION_FEET)
-    sea_level_pressure = calc_sea_level_pressure (local_airport_hpa, local_airport_meters)
 
-    print(f" Local Airport Station: elevation={local_airport_meters:.2f}m, pressure={local_airport_hpa:.2f}, SLP={sea_level_pressure:.2f}")
+    sea_level_pressure = calc_sea_level_pressure(local_airport_hpa, local_airport_meters)
+    print(f"\n{local_airport_string}:")
+    print(
+        f" Local Airport Station: elevation={local_airport_meters:.2f}m, pressure={local_airport_hpa:.2f}, SLP={sea_level_pressure:.2f}")
+
+    # Adjust SLP with calibration constant for BMP585
+    sea_level_pressure -= (-0.6634)
+    print(f"Corrected SLP with calibration: {sea_level_pressure:.2f}m")
 
     # try:
     #     with open("last-sea-level-pressure.txt", "r") as data_file:
@@ -717,16 +754,14 @@ def main():
 
     # Initialize state for loop
     first_run = True
-    display_mode = 0
     sync_time_requested = True  # True for first time, then every day, at next fix will set system clock
 
     current_time = time.monotonic()
     last_sensor_update = 0.0  # Force sensor update on the first loop
-    last_gas_update = current_time
-    last_partial_refresh_eink_update = current_time
-    last_full_refresh_eink_update = current_time
-    last_gps_update = current_time
-    last_clock_set_update = current_time
+    # Initialize all update timers to current time
+    last_gas_update = last_partial_refresh_eink_update = last_full_refresh_eink_update = last_gps_update = last_clock_set_update = current_time
+
+    last_gps_fix_time = None
 
     # Initialize metrics
     sys_meters = 0.0
@@ -744,9 +779,13 @@ def main():
 
     prev_alt = None
     prev_press = None
+
+    # E-Ink Display
+    display_mode = 0
+    full_refresh_mode = None  # Tri-state: True = Full, False = Partial, None = No Refresh
     eink_partial_refresh_count = 0
 
-    print("\nstart of main loop")
+    print("\nStart of main loop")
     gc.collect()
     while True:
         start_loop_tick = time.monotonic()
@@ -757,15 +796,14 @@ def main():
 
         # Consume queued button press (from either physical GPIO or touch GT911)
         button_state = get_button()
-        force_eink_update = False
+        eink_update_needed = False
 
         if button_state is not None:
             # Button 1: Display Mode Toggle (Big Dashboard -> Barometer Details -> GPS Details)
             if button_state == 1:
                 display_mode = (display_mode + 1) % 3
                 print(f"* Switched to Display Mode: {display_mode}")
-                force_eink_update = True
-                eink_partial_refresh_count = 0
+                full_refresh_mode = True
 
             # Button 2: Altitude/SLP Calibration Mode
             elif button_state == 2:
@@ -778,22 +816,19 @@ def main():
                 )
                 # Flush residual buttons/touch queued this processing
                 clear_pending_button()
-                force_eink_update = True
-                eink_partial_refresh_count = 0
+                full_refresh_mode = True
 
             # Button 3: Metric / Imperial Unit Toggle
             elif button_state == 3:
                 is_metric = not is_metric
-                force_eink_update = True
-                eink_partial_refresh_count = 0
+                full_refresh_mode = True
 
             # Button 4: Oregon Altitude Reference Screen
             elif button_state == 4:
                 display_altitude_reference(is_metric)
                 # Clear pending inputs so touch inputs during modal display don't trigger actions upon return
                 clear_pending_button()
-                force_eink_update = True
-                eink_partial_refresh_count = 0
+                full_refresh_mode = True
 
         # Barometer, Temperature, humidity, IAQ (Every 2 seconds)
         if (current_time - last_sensor_update) >= SENSOR_INTERVAL_SEC or first_run:
@@ -853,13 +888,14 @@ def main():
                 # Start with Big Dashboard: Display modes: 0 = Big Dashboard, 1 = Altimeter Details, 2 = GPS Details
                 first_run = False
                 display_mode = 0
-                force_eink_update = True
+                full_refresh_mode = True  # First draw is a Full Refresh
 
         has_new_gps = gps.update()
         # GPS Refresh (Every 1 seconds)
         if (current_time - last_gps_update) >= GPS_INTERVAL_SEC:
             last_gps_update = current_time
             if gps.has_fix:
+                last_gps_fix_time = time.monotonic()
                 print_gps_metrics(gps, time_zone_hours)
                 if sync_time_requested:
                     if set_pi_system_time_from_gps(gps):
@@ -867,43 +903,58 @@ def main():
                         # only after successful Pi system time reset, turn off synch request flag
                         sync_time_requested = False
             else:
-                print("...Waiting for GPS fix...")
+                if last_gps_fix_time is None:
+                    print("...Waiting for GPS fix (no previous fix)")
+                else:
+                    minutes_since_fix = int((time.monotonic() - last_gps_fix_time) / 60)
+                    print(f"...Waiting for GPS fix ({minutes_since_fix} min since last fix)")
 
-        # Every day request that Pi's system time synchronized with GPS
-        if (current_time - last_clock_set_update) >= SET_CLOCK_INTERVAL_SEC:
-            sync_time_requested = True
+            # Every day request that Pi's system time synchronized with GPS
+            if (current_time - last_clock_set_update) >= SET_CLOCK_INTERVAL_SEC:
+                sync_time_requested = True
 
-        # E-ink Display Refresh, partial and full updates
-        if force_eink_update or (current_time - last_partial_refresh_eink_update) >= EINK_PARTIAL_REFRESH_SEC:
-            last_partial_refresh_eink_update = current_time
-            prev_alt = sys_meters
-            prev_press = sys_hpa
+            # E-ink Display Refresh: Evaluate timers if no button event forced full_refresh_mode
+            time_since_partial = current_time - last_partial_refresh_eink_update
             time_since_full = current_time - last_full_refresh_eink_update
 
-            # Button presses (force_eink_update) force partial refresh for instant UI response
-            if not force_eink_update and (
-                    eink_partial_refresh_count >= MAX_EINK_PARTIAL_REFRESH
-                    or time_since_full >= EINK_FULL_REFRESH_SEC
-            ):
-                use_partial = False
-                eink_partial_refresh_count = 0
-                last_full_refresh_eink_update = current_time
-            else:
-                use_partial = True
-                eink_partial_refresh_count += 1
+            if full_refresh_mode is None:
+                if time_since_partial >= EINK_PARTIAL_REFRESH_SEC:
+                    # Force full refresh if partial cycle threshold or time limit reached
+                    if (eink_partial_refresh_count >= MAX_EINK_PARTIAL_REFRESH
+                            or time_since_full >= EINK_FULL_REFRESH_SEC):
+                        full_refresh_mode = True
+                    else:
+                        full_refresh_mode = False
 
-            if display_mode == 0:
-                display_big_dashboard(sys_meters, sys_hpa, sys_iaq, gps, is_metric, partial=use_partial)
-            elif display_mode == 1:
-                display_altimeter_details(
-                    sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric, is_final=False,
-                    partial=use_partial
-                )
-            elif display_mode == 2:
-                display_gps_details(gps, partial=use_partial)
+            # E-Ink Display Render Execution
+            if full_refresh_mode is not None:
+                if full_refresh_mode:
+                    eink_partial_refresh_count = 0
+                    last_full_refresh_eink_update = current_time
+                else:
+                    eink_partial_refresh_count += 1
 
-            flush_touch_inputs()
-            gc.collect()
+                last_partial_refresh_eink_update = current_time
+
+                if display_mode == 0:
+                    display_big_dashboard(
+                        sys_meters, sys_hpa, sys_iaq, gps, last_gps_fix_time,
+                        is_metric, full_refresh=full_refresh_mode
+                    )
+                elif display_mode == 1:
+                    display_altimeter_details(
+                        sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq,
+                        is_metric, is_final=False, full_refresh=full_refresh_mode
+                    )
+                elif display_mode == 2:
+                    display_gps_details(
+                        gps, last_gps_fix_time, full_refresh=full_refresh_mode
+                    )
+
+                # Reset flag and purge residual touch inputs registered during draw cycle
+                full_refresh_mode = None
+                flush_touch_inputs()
+                gc.collect()
 
         # Sleep to reduce CPU utilization
         if LOOP_STRETCH_SLEEP > 0:
@@ -940,12 +991,12 @@ if __name__ == "__main__":
                   "...")
             display_altimeter_details(
                 sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq,
-                is_metric, is_final=True, partial=False
+                is_metric, is_final=True, full_refresh=True
             )
         except Exception as e:
             print(f"Error drawing final display on exit: {e}")
 
-        # E-Ink Sleep
+        # Put E-Ink in Sleep Mode
         try:
             if 'epd_disp' in globals() and epd_disp is not None:
                 epd_disp.sleep()
