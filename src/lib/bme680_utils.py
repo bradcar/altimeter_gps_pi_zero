@@ -1,6 +1,17 @@
-# bme680_utils.py
+#!/usr/bin/env python3
 """
+bme680_utils.py
 
+Indoor Air Quality (IAQ) calculation and qualitative assessment module for BME680 gas sensors.
+
+Module Highlights:
+    * Brad's Mathematical estimation of IAQ index combining logarithmic gas resistance measurements
+      with humidity offset penalty calculations.
+    * Standardization of numerical IAQ scores (0-500 scale) into descriptive quality categories.
+
+Methods:
+    * calculate_iaq: Calculates Indoor Air Quality (IAQ) score using raw gas sensor resistance in ohms and relative humidity percentage.
+    * iaq_quality_to_string: Maps a numerical IAQ value to a descriptive qualitative string (e.g., 'warmup', 'best', 'poor', 'DANGER').
 """
 from math import log
 

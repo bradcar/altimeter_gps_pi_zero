@@ -2,25 +2,45 @@
 """
 eink_ssd1680_gt911_utils.py
 
-Utils for Waveshare 2.13" E-Paper Touch Hat (epd2in13_V4)
-Driver & canvas helpers
+Utilities for WaveShare 2.13" E-Paper Touch Hat (epd2in13_V4)
 
 Features
     * Display 250px x 122px
         - Pillow: Y = Width/Horizontal, X = Height/Vertical
     * GT911 Touch Controller
+    * logging
 
-Variable Name	Role in Demo Code	Pixel Range in Code	Physical Orientation
-GT_Dev.X[0]	Short Axis (Height / Vertical)	0 to 121 (Clamped check: < 121)	Native Width
-GT_Dev.Y[0]	Long Axis (Width / Horizontal)	0 to 249 (Clamped check: < 244)	Native Height
+Display
+    GT_Dev.X[0]	Short Axis (Height / Vertical)	0 to 121 (Clamped check: < 121)	Native Width
+    GT_Dev.Y[0]	Long Axis (Width / Horizontal)	0 to 249 (Clamped check: < 244)	Native Height
 
+References:
+    https://www.waveshare.com/wiki/2.13inch_Touch_e-Paper_HAT_Manual#Raspberry_Pi
+    wget https://files.waveshare.com/upload/4/4e/Touch_e-Paper_Code.zip
+    unzip Touch_e-Paper_Code.zip -d Touch_e-Paper_Code
 
-https://www.waveshare.com/wiki/2.13inch_Touch_e-Paper_HAT_Manual#Raspberry_Pi
-wget https://files.waveshare.com/upload/4/4e/Touch_e-Paper_Code.zip
-unzip Touch_e-Paper_Code.zip -d Touch_e-Paper_Code
+Methods:
+    map_touch_to_display - Transforms raw hardware GT911 touch coordinates into logical display coordinates based on screen orientation.
+    reset_gt911 - Triggers a hardware reset pulse on the GT911 touch controller to initialize its I2C at address 0x14.
+    GT911Touch.__init__ - Initializes the touch controller instance by setting default pins, state attributes, and initiating I2C detection.
+    GT911Touch._init_i2c - Connects to the I2C bus and scans primary and secondary I2C addresses to establish communication with the GT911 sensor.
+    GT911Touch.read_touch_points - Polls the GT911 status registers and reads coordinate buffer data to return a list of touch points.
+    GT911Touch.transform_touch_point - Transforms a single raw TouchPoint object into display-mapped coordinates by calling map_touch_to_display.
+    GT911Touch.get_single_press - Processes touch inputs with debouncing and duration logic to detect and return distinct single-press events.
+    GT911Touch.flush_buffer - Clears the GT911 status registers and resets tracking flags to purge pending touch inputs.
+    GT911Touch._clear_status_register - Writes to the GT911 status register over I2C to acknowledge and clear processed touch buffer data.
+    init_eink_display - Sets up the E-Ink display driver, clears the screen, resets touch hardware, and initializes the global Pillow canvas buffer.
+    blank_canvas_eink - Clears the drawing canvas by filling the entire Pillow canvas area with white pixels.
+    get_rotated_buffer - Applies a 180-degree rotation to the Pillow image canvas and generates a compatible pixel buffer for the E-Ink display driver.
+    refresh_eink_display - Updates the physical E-Ink display using either a fast partial update or a full screen refresh cycle with GC.
+    check_touch_inputs - Polls the initialized GT911 driver for debounced single-press touches.
+    align_touch_point_to_display - Converts raw touch coordinates into rotated display coordinates.
+    flush_touch_inputs - Flushes residual touch data from the active GT911 touch buffer.
+    erase_sleep_eink - Clears the display screen, puts the E-Ink display controller into low-power sleep mode, and releases hardware interfaces.
 
 """
 import gc
+import logging
 import sys
 import time
 from dataclasses import dataclass
@@ -55,15 +75,19 @@ GT911_READ_COORD_ADDR = 0x814E
 GT911_PRODUCT_ID_ADDR = 0x8140
 
 # Hardware Native Base Dimensions (0° Portrait)
-TOUCH_NATIVE_W = 122  # Short Axis (x: 0 .. 121)
-TOUCH_NATIVE_H = 250  # Long Axis  (y: 0 .. 249)
+TOUCH_NATIVE_W = 122  # Short Axis (x: 0 to 121)
+TOUCH_NATIVE_H = 250  # Long Axis  (y: 0 to 249)
 
 # Virtual Canvas / Target Screen Defaults
-VIRTUAL_WIDTH = 250   # Horizontal / Y-axis
+VIRTUAL_WIDTH = 250  # Horizontal / Y-axis
 VIRTUAL_HEIGHT = 122  # Vertical / X-axis
 FILL_WHITE = 255
 
 DEBUG_TOUCH = True  # Set to True to print touch events to stdout
+
+# Calling script should setup:
+#   logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -78,8 +102,8 @@ def map_touch_to_display(raw_x: int, raw_y: int, rotation: int = 90) -> tuple[in
     """
     Transforms raw GT911 touch coordinates into logical display coordinates.
     Returns (disp_y, disp_x) where:
-      - disp_y = Horizontal / Width Axis (0 .. 249)
-      - disp_x = Vertical / Height Axis  (0 .. 121)
+      - disp_y = Horizontal / Width Axis (0 to 249)
+      - disp_x = Vertical / Height Axis  (0 to 121)
     """
     # 1. Clamp raw sensor ranges to hardware limits
     clamped_x = max(0, min(TOUCH_NATIVE_W - 1, raw_x))  # 0 .. 121
@@ -113,9 +137,10 @@ def reset_gt911():
         time.sleep(0.02)
         epdconfig.digital_write(RST_PIN, 1)
         time.sleep(0.05)
-        print(" * GT911 Eink Touch reset at I2C 0x14")
+        print(" * GT911 E-Ink Touch reset at I2C 0x14")
+        logger.info("GT911 E-Ink Touch reset at I2C 0x14")
     except Exception as e:
-        print(f"* GT911 Eink touch reset error: {e}")
+        logger.error(f"GT911 E-Ink touch reset error: {e}")
 
 
 class GT911Touch:
@@ -143,13 +168,14 @@ class GT911Touch:
                         smbus2.i2c_msg.read(addr, 4)
                     )
                     self.address = addr
-                    print(f" * GT911 Eink Touch detected at I2C address 0x{addr:02X}")
+                    print(f" * GT911 E-Ink Touch detected at I2C address 0x{addr:02X}")
+                    logger.info(f"GT911 E-Ink Touch detected at I2C address 0x{addr:02X}")
                     return
                 except Exception:
                     continue
-            print("GT911 WARNING: No Eink Touch responded at 0x14 or 0x5D")
+            logger.warning("No GT911 E-Ink Touch responded at 0x14 or 0x5D")
         except Exception as e:
-            print(f"GT911 ERROR: Failed to open I2C bus {self.bus_num}: {e}")
+            logger.error(f"Failed to open I2C bus {self.bus_num}: {e}")
             self.bus = None
 
     def read_touch_points(self) -> list[TouchPoint]:
@@ -198,10 +224,12 @@ class GT911Touch:
             self._clear_status_register()
             return points
 
-        except Exception:
+
+        except Exception as e:
+            logger.error(f"Failed to read touch points from GT911: {e}")
             return []
 
-    def transform_touch_point(self, pt: TouchPoint, rotation: int = 90) -> tuple[int, int]:
+    def transform_touch_point(self, pt: TouchPoint, rotation: int = 90):
         """Delegates transformation to map_touch_to_display."""
         return map_touch_to_display(pt.x, pt.y, rotation=rotation)
 
@@ -217,7 +245,7 @@ class GT911Touch:
                     if DEBUG_TOUCH:
                         pt = raw_points[0]
                         ty, tx = self.transform_touch_point(pt, rotation=rotation)
-                        print(f"[GT911 TOUCH] Raw({pt.x}, {pt.y}) -> Disp{rotation}°(Y={ty}, X={tx})")
+                        logger.debug(f"[GT911 TOUCH] Raw({pt.x}, {pt.y}) -> Display{rotation}°(Y={ty}, X={tx})")
                     return raw_points
             return []
         else:
@@ -234,8 +262,8 @@ class GT911Touch:
             reg_lsb = GT911_READ_COORD_ADDR & 0xFF
             write_cmd = smbus2.i2c_msg.write(self.address, [reg_msb, reg_lsb, 0x00])
             self.bus.i2c_rdwr(write_cmd)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to clear GT911 status register: {e}")
 
 
 # E-Ink Display Globals
@@ -251,6 +279,7 @@ _gt911_driver = None
 def init_eink_display():
     global epd_disp, epd_image, epd_draw, _gt911_driver
 
+    logger.info("Initializing E-Ink display and GT911 touch hardware...")
     epd_disp = epd2in13_V4.EPD()
     epd_disp.init(epd_disp.FULL_UPDATE)
     epd_disp.Clear(0xFF)
@@ -275,13 +304,13 @@ def get_rotated_buffer(img):
     return epd_disp.getbuffer(img.rotate(180))
 
 
-def refresh_eink_display(disp, draw, img, partial=True):
+def refresh_eink_display(disp, draw, img, full_refresh=True):
     """
     Partial and full E-Ink refresh. Full refresh also does gc (Garbage collection).
     """
     global partial_refresh_count, epd_disp
 
-    if not partial or partial_refresh_count >= MAX_PARTIAL_REFRESHES:
+    if full_refresh or partial_refresh_count >= MAX_PARTIAL_REFRESHES:
         # Full refresh (1-3 seconds)
         epd_disp.init(epd_disp.FULL_UPDATE)
         epd_disp.displayPartBaseImage(get_rotated_buffer(img))
@@ -314,7 +343,7 @@ def flush_touch_inputs():
         _gt911_driver.flush_buffer()
 
 
-def cleanup_eink(display=None, clear=False):
+def erase_sleep_eink(display=None, clear=False):
     global epd_disp
     target_epd = display if display is not None else epd_disp
     if target_epd:
@@ -331,5 +360,6 @@ def cleanup_eink(display=None, clear=False):
             if hasattr(target_epd, 'Dev_exit'):
                 target_epd.Dev_exit()
 
+
         except Exception as e:
-            print(f"Warning during E-Ink cleanup: {e}")
+            logger.error(f"Warning during E-Ink cleanup: {e}")

@@ -1,7 +1,21 @@
-# gps_utils.py
+#!/usr/bin/env python3
 """
+gps_utils.py
 
-PMTK314 GPS Fields - we use 2, 4, 5 as shown in *'s
+Library Module Methods:
+
+Methods:
+    initialize_gps - Initializes the UART connection, synchronizes system time, and configures the GPS module sentence output and refresh rate.
+    sync_system_time_and_gps - Cross-synchronizes clocks by setting the Pi system time from valid GPS RTC data, or injecting Pi system time into the GPS if its RTC time is missing/invalid.
+    gps_has_valid_time - Parses incoming NMEA RMC sentences to check if the GPS RTC holds a valid UTC date and time (year >= 2026), returning a datetime object or None.
+    get_time_from_gps - Converts the GPS UTC timestamp to a local time struct_time using a specified timezone offset.
+    set_pi_system_time_from_gps - Updates the Raspberry Pi system clock in UTC using the date command and the current GPS UTC timestamp.
+    print_gps_dms - Formats and prints the current GPS latitude and longitude coordinates in degrees, minutes, and seconds (DMS).
+    get_map_string - Formats current GPS coordinates into a standard, copy-pasteable map location string (Apple Maps).
+    get_lat_string - Formats the GPS latitude into a formatted decimal degree string with N/S orientation.
+    get_lon_string - Formats the GPS longitude into a formatted decimal degree string with E/W orientation.
+
+PMTK314 GPS Fields - typical use 2, 4, 5 as shown with *'s
     GLL — Latitude, longitude, and fix time data.
     * RMC — Essential position, speed, and time data.
     VTG — Track vector, ground speed, and course over ground.
@@ -21,6 +35,7 @@ PMTK314 GPS Fields - we use 2, 4, 5 as shown in *'s
     Reserved — Unused index for future MTK firmware expansion.
     PMTK101 — MTK testing and diagnostic output message.
     PMTK102 — MTK auxiliary engineering calibration message.
+
 """
 import functools
 import operator
@@ -44,15 +59,11 @@ def initialize_gps():
     """
     print("\nInitializing GPS...")
     uart = serial.Serial("/dev/serial0", baudrate=9600, timeout=10)
-    # Sometimes, passing permissions through symlinks inside Python virtual environments fails silently. Let's bypass the symlink entirely.
-    # TODO Change from /dev/serial0 to the direct hardware node:
-    # uart = serial.Serial("/dev/ttyAMA0", baudrate=9600, timeout=10)
-
 
     # Turn on the basic GGA, RMC, GGA(Accuracy), update time 1sec, 1Hz (if change Hz, check UART timeout)
 
     # Time Injection, it uses uart because it is before driver attaches
-    inject_system_time_to_gps_if_needed(uart)
+    sync_system_time_and_gps(uart)
     uart.flush()
     uart.reset_input_buffer()
 
@@ -67,60 +78,91 @@ def initialize_gps():
     return gps
 
 
-def inject_system_time_to_gps_if_needed(uart_connection: serial.Serial):
+def sync_system_time_and_gps(uart_connection: serial.Serial):
     """
-    Injects system time ($PMTK740) into MT3339 GPS and verifies PMTK001 acknowledgement.
+    GPS time is more accurate than system time, if it is valid. If GPX
+    RTC (real time clock) is not valid, inject Pi system time ($PMTK740) into MT3339 GPS
+    and verifies PMTK001 acknowledgement.
+
+    Checks GPS RTC time. If missing, injects Pi system time ($PMTK740).
+    If GPS time is already valid, synchronizes the Pi system clock directly.
     """
-    if gps_has_valid_time(uart_connection):
-        print(" * GPS RTC has valid time.")
+    gps_time = gps_has_valid_time(uart_connection)
+    pi_time = time.gmtime()
+
+    if gps_time is not None:
+        print(f" * GPS RTC has accurate valid time from RTC:  {gps_time.isoformat()}")
+        print(f"   Used GPS to update Pi system (Pi Time was: {pi_time.tm_year:04d}-{pi_time.tm_mon:02d}-{pi_time.tm_mday:02d}T{pi_time.tm_hour:02d}:{pi_time.tm_min:02d}:{pi_time.tm_sec:02d}")
+        # Sync Pi system clock directly if Pi clock hasn't been set yet
+        utc_str = gps_time.strftime("%Y-%m-%d %H:%M:%S")
+        os.system(f'sudo date -u -s "{utc_str}" > /dev/null 2>&1')
         return True
 
-    # Check if Pi system time is sane before using it
-    now = time.gmtime()
-    if now.tm_year < 2026:
-        print(" * Pi system time is invalid (pre-2026) — Skipping Pi system time injection.")
+    # Check if Pi system time is sane before injecting into GPS
+    # RTC defaults to its firmware release epoch (often 1980, 2000, or 2019).
+
+    if pi_time.tm_year < 2026:
+        print(" * Pi system time is invalid (pre-2026) — Skipping using Pi system time to update GPS.")
         return False
 
-    # Inject time if GPS has no time, but Pi has good time
-    print(" * GPS missing valid time. Injecting Pi system time...")
+    # Inject time to GPS if GPS lacks valid time but Pi system clock is correct
+    print(" * GPS missing valid time")
+    print("   Used Pi system clock to update GPS clock")
     try:
-        payload = f"PMTK740,{now.tm_year:04d},{now.tm_mon:02d},{now.tm_mday:02d},{now.tm_hour:02d},{now.tm_min:02d},{now.tm_sec:02d}"
+        payload = f"PMTK740,{pi_time.tm_year:04d},{pi_time.tm_mon:02d},{pi_time.tm_mday:02d},{pi_time.tm_hour:02d},{pi_time.tm_min:02d},{pi_time.tm_sec:02d}"
         checksum = functools.reduce(operator.xor, (ord(c) for c in payload))
         command = f"${payload}*{checksum:02X}\r\n"
 
         uart_connection.reset_input_buffer()
         uart_connection.write(command.encode("ascii"))
         uart_connection.flush()
-        print(f" * Sent Time Injection: {command.strip()}")
+        print(f"   Sent Time Injection to GPS: {command.strip()}")
         return True
     except Exception as e:
-        print(f" * Error during time injection: {e}")
+        print(f" * Error doing time injection into GPS: {e}")
         return False
 
 
-def gps_has_valid_time(uart_connection: serial.Serial, check_timeout: float = 2.0) -> bool:
+def gps_has_valid_time(uart_connection: serial.Serial, check_timeout: float = 2.0):
     """
     Reads incoming NMEA sentences to check if the GPS RTC already holds a valid year.
-    Returns True if time is already known, False if GPS needs time injection.
+
+    Since the project operates in 2026, any year prior to 2026 confirms the RTC lacks a
+    valid system time and requires time injection or a satellite lock.
+    RTC defaults to its firmware release epoch (often 1980, 2000, or 2019).
+
+    :param uart_connection: Active PySerial connection instance.
+    :param check_timeout: Seconds to listen for a valid NMEA sentence.
+    :return: UTC datetime object if valid (year >= 2026), otherwise None.
     """
     start_time = time.time()
     while time.time() - start_time < check_timeout:
         if uart_connection.in_waiting:
             line = uart_connection.readline().decode("ascii", errors="ignore")
 
-            # Look for RMC or ZDA sentences which contain date strings
+            # Match RMC sentence: $GPRMC,hhmmss.ss,A,lat,N,lon,E,spd,cog,ddmmyy,...
             if "$GPRMC" in line or "$GNRMC" in line:
                 parts = line.split(",")
 
-                # RMC format: $GPRMC,hhmmss.ss,A,lat,N,lon,E,spd,cog,ddmmyy,...
-                if len(parts) > 9 and len(parts[9]) == 6:
+                if len(parts) > 9 and len(parts[1]) >= 6 and len(parts[9]) == 6:
                     try:
-                        year = int(parts[9][4:6]) + 2000
-                        if year >= 2026:  # Valid modern date in GPS RTC
-                            return True
-                    except ValueError:
-                        continue  # Skip corrupt string and keep checking next line
-    return False
+                        time_str = parts[1]  # hhmmss.ss
+                        date_str = parts[9]  # ddmmyy
+
+                        day = int(date_str[0:2])
+                        month = int(date_str[2:4])
+                        year = int(date_str[4:6]) + 2000
+
+                        hour = int(time_str[0:2])
+                        minute = int(time_str[2:4])
+                        second = int(time_str[4:6])
+
+                        if year >= 2026:
+                            return datetime(year, month, day, hour, minute, second)
+                    except (ValueError, IndexError):
+                        continue  # Skip corrupted sentences and keep listening
+
+    return None
 
 
 def get_time_from_gps(gps: GPS, time_zone_hours: float = -7.0) -> time.struct_time | None:

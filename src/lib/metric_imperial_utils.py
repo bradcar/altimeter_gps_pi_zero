@@ -1,4 +1,13 @@
-# metric_imperial_utils.py
+#!/usr/bin/env python3
+"""
+metric_imperial_utils.py
+
+Methods:
+    feet_to_meters - Converts imperial feet to meters.
+    meters_to_feet - Converts meters to imperial feet.
+    metric_format - Returns a conversion factor and unit suffix string based on whether metric or imperial.
+    altitude_to_string - Formats altitude in meters into a rounded string with the appropriate unit symbol.
+"""
 
 def feet_to_meters(feet):
     return feet / 3.28083989501312

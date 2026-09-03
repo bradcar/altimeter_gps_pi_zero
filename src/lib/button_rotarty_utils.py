@@ -2,10 +2,22 @@
 """
 button_rotary_utils.py
 
-GPIO buttons and rotary encoder setup, debounce, state, and button flags.
+Individual button and rotary encoder utilities.
+    * GPIO buttons and rotary encoder setup, debounce, state, and button flags.
+    * NTOE: Instead of this Suggest using unified handler instead of individual buttons below
+    * Currently, 3 Physical buttons defined and rotary encoder with switch
+    * Touch panel can set state for 4 buttons
 
-Currently, 3 Physical buttons defined and rotary encoder with switch
-Touch panel can set state for 4 buttons
+Methods:
+    * init_controls: Configures GPIO pins for physical buttons, rotary encoder signals, and pushbutton interrupts.
+    * trigger_button_1: Latch Button 1 State (usable by touch events).
+    * trigger_button_2: Latch Button 2 State (usable by touch events).
+    * trigger_button_3: Latch Button 3 State (usable by touch events).
+    * trigger_button_4: Latch virtual Button 4 State (usable by touch events).
+    * check_button_1: Checks and consumes Button 1 latch state.
+    * check_button_2: Checks and consumes Button 2 latch state.
+    * check_button_3: Checks and consumes Button 3 latch state.
+    * check_button_4: Checks and consumes Button 4 latch state.
 """
 
 import time

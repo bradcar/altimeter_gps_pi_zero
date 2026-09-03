@@ -1,5 +1,7 @@
-# pi_zero_i2c_bridge_utils.py
+#!/usr/bin/env python3
 """
+pi_zero_i2c_bridge_utils.py
+
 Raspberry Pi Zero I2C Bridge Object
 
 Using i2c 1 Primary i2c on Pi Zero:
@@ -13,6 +15,16 @@ Using i2c 0 Secondary i2c on Pi Zero:
     i2c0 = PiZeroI2CBridge("/dev/i2c-0")
     SDA: GPIO 0 (Physical Pin 27)
     SCL: GPIO 1 (Physical Pin 28)
+
+Methods:
+    PiZeroI2CBridge.__init__ - Initializes the I2C on the specified Linux device bus path.
+    PiZeroI2CBridge.scan - Probes 7-bit I2C addresses (0x08 to 0x77) returns a list of responsive devices.
+    PiZeroI2CBridge.writeto - Transmits a raw byte buffer  to an I2C device without specifying a target register address.
+    PiZeroI2CBridge.readfrom - Reads a number of raw bytes directly from an I2C target device.
+    PiZeroI2CBridge.writeto_mem - Writes a byte buffer to a specific register memory address on an I2C device.
+    PiZeroI2CBridge.readfrom_mem - Reads a number of bytes from a target register memory address on an I2C device and returns them as a bytes object.
+    PiZeroI2CBridge.readfrom_mem_into - Reads data from a target register memory address directly into a pre-allocated byte buffer slice.
+    PiZeroI2CBridge.close - Closes the underlying Linux I2C device bus file descriptor and releases resources.
 
 """
 from periphery import I2C
@@ -65,7 +77,7 @@ class PiZeroI2CBridge:
         read_msg = I2C.Message([0] * len(buf), read=True)
         self.i2c.transfer(addr, [write_msg, read_msg])
 
-        # Copy the retrieved data directly into the passed-in buffer slice
+        # Copy the retrieved data directly into the buffer slice
         buf[:] = read_msg.data
 
     def close(self):

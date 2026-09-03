@@ -1,19 +1,24 @@
-# pi_zero_utils.py
+#!/usr/bin/env python3
 """
-General purpose Pi Zero functions
+pi_zero_utils.py
 
-Temperature:
-    pico_temperature(): get temperature of internal on-chip temperature.
+Pi Zero Linux utilities.
 
-Time-out:
-    time_out(): wrapper to timeout number of seconds.
+Module Highlights:
+    * uses logging
+
+Functions:
+    * pi_on_chip_temperature: Reads on-chip CPU temperature from the Linux system.
+    * scan_i2c_bus: Scans the I2C bus for devices.
+      highlights common I2C devices (BMP585, BME680, SSD1305, LIS3MDL, GT911 Touch).
+    * timeout: Raises a TimeoutError using SIGALRM if an enclosed code block exceeds the duration.
 """
 import logging
 import signal
 from contextlib import contextmanager
 
 # Calling script should setup:
-# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+#   logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
@@ -63,7 +68,7 @@ def scan_i2c_bus(i2c_primary):
                 identity = "likely LIS3MDL Magnetometer"
                 lis3mdl_detected = address
             elif address in (0x14,):
-                identity = "likely Waveshare Eink Touch "
+                identity = "likely WaveShare E-ink Touch "
                 waveshare_touch_detected = address
             else:
                 identity = "unknown device signature"

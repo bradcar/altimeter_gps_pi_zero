@@ -1,6 +1,19 @@
-# eink_SSD1680_utils.py
+#!/usr/bin/env python3
 """
-General Utils for Adafruit E-ink SSD1680
+eink_SSD1680_utils.py
+
+Utilities for Adafruit SSD1680-based E-Paper displays.
+
+Module Highlights:
+    * Framebuffer abstraction converting standard landscape virtual coordinates
+      (250px x 122px) into hardware-aligned physical display buffers.
+    * SPI bus interfacing with dedicated hardware line handling (Data/Command, Reset, Busy).
+    * Integrated fast partial update logic with automatic image rotation pass for E-Ink refresh.
+
+Methods:
+    * init_eink_display: Initializes the physical SSD1680 E-Ink display driver over SPI and creates a new Pillow canvas drawing context.
+    * blank_canvas_eink: Clears the full drawing canvas by filling the entire display area with dark/black pixels.
+    * refresh_eink_display: Applies a 270-degree rotation to align the logical virtual canvas with physical display orientation and executes screen refresh.
 """
 from PIL import Image, ImageDraw, ImageFont
 import board
