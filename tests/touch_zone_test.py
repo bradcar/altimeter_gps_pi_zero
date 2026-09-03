@@ -25,7 +25,7 @@ try:
         check_touch_inputs,
         flush_touch_inputs,
         align_touch_point_to_display,
-        cleanup_eink,
+        erase_sleep_eink,
     )
 except ImportError:
     from eink_ssd1680_gt911_utils import (
@@ -34,7 +34,7 @@ except ImportError:
         check_touch_inputs,
         flush_touch_inputs,
         align_touch_point_to_display,
-        cleanup_eink,
+        erase_sleep_eink,
     )
 
 SCREEN_WIDTH = 250  # Y-axis extent (Horizontal)
@@ -146,7 +146,7 @@ def main():
 
     finally:
         print("\nCleaning up display hardware...")
-        cleanup_eink(epd_disp, clear=False)
+        erase_sleep_eink(epd_disp, clear=False)
 
 
 if __name__ == "__main__":
