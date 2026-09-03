@@ -23,7 +23,7 @@ Use sea level pressure at nearest airport
     Sylvan Hill
         https://www.portlandmaps.com/detail/benchmarks/-13662910.76695894_5701969.972378978_xy/
         * BM #3758  805.436 feet (** firestation)
-        * BM #3757  777.465 feet (on-ramp east bound)
+        * BM #3757  777.465 feet (on-ramp eastbound)
 
         * BM #3758  463.894 feet
 
@@ -59,9 +59,9 @@ from main_ws import (
 )
 
 # *** BM  # 3758  805.436 feet (** fire station)
-PDX_STATION_HPA = 1011.12
+PDX_STATION_STRING = "PDX - Portland, OR"
+PDX_STATION_HPA = 1009.43
 PDX_STATION_FEET = 20.0
-
 
 FALLBACK_SEA_LEVEL_PRESSURE = 1019.00
 
@@ -193,10 +193,13 @@ def run_calibration():
 
 
     # calculate SLP based on nearest airport
+    local_airport_string = PDX_STATION_STRING
     local_airport_hpa = PDX_STATION_HPA
-    local_airport_meters = feet_to_meters(PDX_STATION_FEET)
 
+    local_airport_meters = feet_to_meters(PDX_STATION_FEET)
     initial_slp_hpa = calc_sea_level_pressure (local_airport_hpa, local_airport_meters)
+    print(f"{local_airport_string}:7")
+    print(f" Local Airport Station: elevation={local_airport_meters:.2f}m, pressure={local_airport_hpa:.2f}, SLP={initial_slp_hpa:.2f}\n")
 
     is_metric = IS_METRIC
 
