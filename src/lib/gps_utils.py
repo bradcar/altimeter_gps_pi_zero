@@ -38,8 +38,8 @@ PMTK314 GPS Fields - typical use 2, 4, 5 as shown with *'s
 
 GPS Precisions:
 
-    Decimal Degree    		      Imperial  Nautical
-    Places  Precision  Metric      Miles   Miles (NM)  @ 10 Knots    What It Identifies
+    Decimal Degree    		     Imperial   Nautical
+    Places  Precision  Metric     Miles    Miles (NM)  @ 10 Knots    What It Identifies
     ------- ---------  --------  --------  ----------  ------------  ----------------------------------------
     0       1          111.1 km   69 mi     60 NM      6 hours       Large state, country, or ocean region
     1       0.1        11.1 km    6.9 mi    6 NM       36 minutes    Large city or coastal approach
@@ -104,7 +104,8 @@ def sync_system_time_and_gps(uart_connection: serial.Serial):
 
     if gps_time is not None:
         print(f" * GPS RTC has accurate valid time from RTC:  {gps_time.isoformat()}")
-        print(f"   Used GPS to update Pi system (Pi Time was: {pi_time.tm_year:04d}-{pi_time.tm_mon:02d}-{pi_time.tm_mday:02d}T{pi_time.tm_hour:02d}:{pi_time.tm_min:02d}:{pi_time.tm_sec:02d}")
+        print(
+            f"   Used GPS to update Pi system (Pi Time was: {pi_time.tm_year:04d}-{pi_time.tm_mon:02d}-{pi_time.tm_mday:02d}T{pi_time.tm_hour:02d}:{pi_time.tm_min:02d}:{pi_time.tm_sec:02d}")
         # Sync Pi system clock directly if Pi clock hasn't been set yet
         utc_str = gps_time.strftime("%Y-%m-%d %H:%M:%S")
         os.system(f'sudo date -u -s "{utc_str}" > /dev/null 2>&1')
