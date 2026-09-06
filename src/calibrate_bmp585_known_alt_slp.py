@@ -44,7 +44,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from barometer_utils import calc_sea_level_pressure
+from barometer_utils import calculate_sea_level_pressure
 from metric_imperial_utils import meters_to_feet, feet_to_meters
 from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 from lib.pi_zero_utils import scan_i2c_bus
@@ -53,7 +53,7 @@ from lib.pi_zero_utils import scan_i2c_bus
 from main_ws import (
     i2c_initialize_bmp585_bme680,
     metric_format,
-    calc_altitude,
+    calculate_altitude,
     encoder,  # Reusing initialized RotaryEncoder object
     rotary_switch,  # Reusing initialized Button object
 )
@@ -166,7 +166,7 @@ def precision_adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_
                 else:
                     new_alt += feet_to_meters(delta * rotary_multiplier)
 
-                new_slp = calc_sea_level_pressure(pressure_hpa, new_alt)
+                new_slp = calculate_sea_level_pressure(pressure_hpa, new_alt)
                 rotary_old = rotary_new
                 print_updated_altitude_calibration(new_alt, new_slp, initial_slp, is_metric)
 
@@ -197,7 +197,7 @@ def run_calibration():
     local_airport_hpa = PDX_STATION_HPA
 
     local_airport_meters = feet_to_meters(PDX_STATION_FEET)
-    initial_slp_hpa = calc_sea_level_pressure (local_airport_hpa, local_airport_meters)
+    initial_slp_hpa = calculate_sea_level_pressure (local_airport_hpa, local_airport_meters)
     print(f"{local_airport_string}:7")
     print(f" Local Airport Station: elevation={local_airport_meters:.2f}m, pressure={local_airport_hpa:.2f}, SLP={initial_slp_hpa:.2f}\n")
 
@@ -229,7 +229,7 @@ def run_calibration():
     print(f"Initial BMP585 altitude BMP585: {initial_bmp_alt:.4f} meter, {meters_to_feet(initial_bmp_alt):.2f} feet")
     print(f"Initial BME680 altitude BME680: {initial_bme_alt:.4f} meter, {meters_to_feet(initial_bme_alt):.2f} feet\n")
 
-    calc_alt_m = calc_altitude(initial_bmp_hpa, initial_slp_hpa)
+    calc_alt_m = calculate_altitude(initial_bmp_hpa, initial_slp_hpa)
     if calc_alt_m != initial_bmp_alt:
         print(f"calc_altitude method != bmp.altitude")
         print(f"calc_altitude={calc_alt_m:.4f} meter, {meters_to_feet(calc_alt_m):.2f} feet\n")
@@ -262,8 +262,8 @@ def run_calibration():
     print(f" DIFF: BMP680 total error   : {bme_total_offset:.4f} hpa\n")
 
     print("------------------------------------------\n")
-    initial_meters = calc_altitude(final_hpa, initial_slp_hpa)
-    final_meters = calc_altitude(final_hpa, final_slp)
+    initial_meters = calculate_altitude(final_hpa, initial_slp_hpa)
+    final_meters = calculate_altitude(final_hpa, final_slp)
     print(
         f"Alt with START  SLP predicts & final hPa: {initial_meters:.4f} m, {meters_to_feet(initial_meters):.2f} feet")
     print(f"Alt with FINAL  SLP predicts & final hPa: {final_meters:.4f} m, {meters_to_feet(final_meters):.2f} feet")
@@ -274,8 +274,8 @@ def run_calibration():
     print(" -- Example of hPa day swing")
     s1 = 1010.20
     s2 = 1023.10
-    m1 = calc_altitude(final_hpa, s1)
-    m2 = calc_altitude(final_hpa, s2)
+    m1 = calculate_altitude(final_hpa, s1)
+    m2 = calculate_altitude(final_hpa, s2)
     print(f"    Alt with {s1} hPa slp predicts & final hPa: {m1:.4f} m")
     print(f"    Alt with {s2} hPa slp predicts & final hPa: {m2:.4f} m")
 

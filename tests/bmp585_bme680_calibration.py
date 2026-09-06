@@ -51,7 +51,7 @@ TODO: all calibarion offset to BMP585 code
 import time
 import logging
 
-from barometer_utils import bme_hpa_correction
+from barometer_utils import correct_bme_hpa
 from bme680 import BME680_I2C
 from bme680_utils import calculate_iaq
 from lib.micropython_bmpxxx import bmpxxx
@@ -102,7 +102,7 @@ def main():
         print(f"\nBME un-calibrated Altitude  = {bme.altitude:.2f} meters")
         print(f"BMP un-calibrated Altitude = {bmp.altitude:.2f} meters\n")
 
-        average_diff = bme_hpa_correction(bme, bmp, 25)
+        average_diff = correct_bme_hpa(bme, bmp, 25)
         print(f"AVE Diff = {average_diff:.7f} Average diff in hpa")
 
         bme.hpa_calibration = average_diff

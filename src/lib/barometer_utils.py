@@ -23,7 +23,7 @@ from micropython_bmpxxx.bmpxxx import BMP585
 #   logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def calc_sea_level_pressure(hpa, meters):
+def calculate_sea_level_pressure(hpa, meters):
     """
     Calculate sea level pressure from pressure and elevation.
     :param hpa:
@@ -34,7 +34,7 @@ def calc_sea_level_pressure(hpa, meters):
     return sea_level_pressure
 
 
-def calc_altitude(hpa, sea_level_pressure):
+def calculate_altitude(hpa, sea_level_pressure):
     """
     Calculate altitude from pressure and sea level pressure.
     :param hpa:
@@ -49,7 +49,7 @@ def bmp585_sensor(bmp, sea_level_pressure):
     try:
         celsius = bmp.temperature
         hpa_pressure = bmp.pressure
-        meters = calc_altitude(hpa_pressure, sea_level_pressure)
+        meters = calculate_altitude(hpa_pressure, sea_level_pressure)
 
         logger.debug(f"BMP585 Temp °C = {celsius:.2f} C")
         logger.debug(f"BMP585 Pressure = {hpa_pressure:.2f} hPA")
@@ -66,7 +66,7 @@ def bme680_sensor(bme, sea_level_pressure):
         percent_humidity = bme.humidity
         hpa_pressure = bme.pressure
         iaq_value = calculate_iaq(bme.gas, percent_humidity)
-        meters = calc_altitude(hpa_pressure, sea_level_pressure)
+        meters = calculate_altitude(hpa_pressure, sea_level_pressure)
 
         logger.debug(f"BME680 Temp °C = {celsius:.2f} C")
         logger.debug(f"BME680 Humidity = {percent_humidity:.1f} %")
@@ -79,7 +79,7 @@ def bme680_sensor(bme, sea_level_pressure):
     return celsius, percent_humidity, hpa_pressure, iaq_value, meters, None
 
 
-def bme_hpa_correction(bme: BME680_I2C, bmp: BMP585, num_samples=25):
+def correct_bme_hpa(bme: BME680_I2C, bmp: BMP585, num_samples=25):
     """
     Calc BME680 hPA adjustment using BMP585 as correct standard, block outliers > 2.0 hPa
     """
