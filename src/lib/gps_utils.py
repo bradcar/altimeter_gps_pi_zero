@@ -36,6 +36,18 @@ PMTK314 GPS Fields - typical use 2, 4, 5 as shown with *'s
     PMTK101 — MTK testing and diagnostic output message.
     PMTK102 — MTK auxiliary engineering calibration message.
 
+GPS Precisions:
+
+    Decimal Degree    		      Imperial  Nautical
+    Places  Precision  Metric      Miles   Miles (NM)  @ 10 Knots    What It Identifies
+    ------- ---------  --------  --------  ----------  ------------  ----------------------------------------
+    0       1          111.1 km   69 mi     60 NM      6 hours       Large state, country, or ocean region
+    1       0.1        11.1 km    6.9 mi    6 NM       36 minutes    Large city or coastal approach
+    2       0.01       1.11 km    0.69 mi   0.6 NM     3.6 minutes   Harbor, bay, or neighborhood
+    3       0.001      111 m      364 ft    0.06 NM    21.6 seconds  Marina basin, runway, or large ship
+    4       0.0001     11.1 m     36.4 ft   0.006 NM   2.16 seconds  Boat slip, fairway buoy, or vehicle
+    5       0.00001    1.11 m     3.64 ft   0.0006 NM  0.22 seconds  Individual dock, hatch, or human position
+
 """
 import functools
 import operator
