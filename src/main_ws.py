@@ -16,7 +16,8 @@ Sensors used
 
 Functionality
     - set's system time after GPS fix established. Resets system to GPS time every 24 hours.
-    - gc - garbage collection every 30min (at gas burn) and full E-Ink refresh.
+    - GC - garbage collection every 30min (at gas burn) and full E-Ink refresh.
+    - Pi Clock needs Wifi to establish correct time, can use GPS RTC
 
 Use sea level pressure at nearest airport
     * Portland updated hourly (7 min before the hour)
@@ -79,12 +80,10 @@ AIRPORTS:
 
 
 TODOS
-    * TOdo why is Reading sensors @ 198.66s 	12:24:06 (clock wrong)
     * todo add warning the GPS altitude is diff than barometer
     * TODO test with other E-Ink display to minimize code overlap
-    * TODO clean up library headers
     * TODO move E-Ink setup into main?
-    * TODO put barometer metrics intro . structure like gps
+    * TODO put barometer metrics intro .structure like gps
 """
 
 import gc
@@ -97,7 +96,7 @@ from adafruit_gps import GPS
 from PIL import ImageFont
 from gpiozero import Button, RotaryEncoder
 
-from barometer_utils import calc_sea_level_pressure, bme_hpa_correction, calc_altitude
+from barometer_utils import calculate_sea_level_pressure, correct_bme_hpa, calculate_altitude
 # from button_rotary_utils import process_inputs, check_rotary_switch_pressed
 from gps_utils import initialize_gps
 from lib.bme680 import BME680_I2C
@@ -112,9 +111,11 @@ from metric_imperial_utils import feet_to_meters, metric_format, altitude_to_str
 from micropython_bmpxxx.bmpxxx import BMP585
 from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 
+FALLBACK_SEA_LEVEL_PRESSURE = 1019.00
+
 # Portland OR, PDX
 PDX_STATION_STRING = "PDX - Portland, OR"
-PDX_STATION_HPA = 1009.43
+PDX_STATION_HPA = 1014.50
 PDX_STATION_FEET = 20.
 
 # big change night
@@ -127,7 +128,7 @@ PDX_STATION_FEET = 20.
 HTH_STATION_HPA = 870.00
 HTH_STATION_FEET = 4230.
 
-FALLBACK_SEA_LEVEL_PRESSURE = 1019.00
+
 
 DEBUG = True
 OVER_TEMP_WARNING = 70.0
@@ -301,7 +302,7 @@ def calibrate_bme_barometer(bme: BME680_I2C | None, bmp: BMP585 | None):
     """ Calibrate BME680 using BMP585 Barometer as golden source """
     average_diff = 1.0312750  # fallback hPa correction for BME680, if no BMP585
     if bmp is not None and bme is not None:
-        average_diff = bme_hpa_correction(bme, bmp, 25)
+        average_diff = correct_bme_hpa(bme, bmp, 25)
         print(f" * BMP585 calibration for BME680 = {average_diff:.7f} hPa")
     elif bme is not None:
         print(f" * No BMP585 to calibrate BME680, using default {average_diff:.7f} hPa")
@@ -364,7 +365,7 @@ def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pres
             else:
                 new_alt += (delta * rotary_multiplier) / 3.28084
 
-            new_slp = calc_sea_level_pressure(pressure_hpa, new_alt)
+            new_slp = calculate_sea_level_pressure(pressure_hpa, new_alt)
             rotary_old = rotary_new
             need_redraw = True
 
@@ -479,16 +480,11 @@ def print_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_
 def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric, is_final=False,
                               full_refresh=False):
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
-    if not is_final:
-        epd_draw.text((3, 3), "Altimeter Details", font=font_small, fill=0)
-        clock_string = time.strftime("%I:%M %p", time.localtime()).lower()
-        clock_width = font_small.getlength(clock_string)
-        epd_draw.text((250 - clock_width, 3), clock_string, font=font_small, fill=0)
-    else:
-        epd_draw.text((3, 3), "Altimeter", font=font_small, fill=0)
-        clock_string = "*SLEEP*  @ " + time.strftime("%I:%M %p", time.localtime()).lower()
-        clock_width = font_small.getlength(clock_string)
-        epd_draw.text((250 - clock_width, 3), clock_string, font=font_small, fill=0)
+
+    epd_draw.text((3, 3), "Altimeter Details", font=font_small, fill=0)
+    clock_string = time.strftime("%I:%M %p", time.localtime()).lower()
+    clock_width = font_small.getlength(clock_string)
+    epd_draw.text((250 - clock_width, 3), clock_string, font=font_small, fill=0)
 
     epd_draw.line((0, 21, 250, 21), fill=0, width=1)
 
@@ -595,7 +591,7 @@ def display_gps_details(gps, last_gps_fix_time, full_refresh=False):
                 epd_draw.text((45, 0), "** NO FIX **", font=font_medium, fill=0)
             else:
                 minutes_since_fix = int((time.monotonic() - last_gps_fix_time) / 60)
-                epd_draw.text((45, 0), f"** NO FIX in {minutes_since_fix}min **", font=font_medium, fill=0)
+                epd_draw.text((45, 0), f"*FIX ({minutes_since_fix}m ago)*", font=font_small, fill=0)
 
         clock_string = time.strftime("%I:%M %p", time.localtime()).lower()
         clock_width = font_small.getlength(clock_string)
@@ -623,6 +619,46 @@ def display_gps_details(gps, last_gps_fix_time, full_refresh=False):
         display_list_names_values(sensor_data, font_list, line_height, start_y, left_margin_x, right_align_x)
         refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
         flush_touch_inputs()
+
+
+def display_final_details(altitude_m, pressure_hpa, temp_c, is_metric, gps, last_gps_fix_time, full_refresh=False):
+    epd_draw.rectangle((0, 0, 250, 122), fill=255)
+
+    epd_draw.text((3, 3), "Altimeter", font=font_small, fill=0)
+    clock_string = "*SLEEP*  @ " + time.strftime("%I:%M %p", time.localtime()).lower()
+    clock_width = font_small.getlength(clock_string)
+    epd_draw.text((250 - clock_width, 3), clock_string, font=font_small, fill=0)
+
+    epd_draw.line((0, 21, 250, 21), fill=0, width=1)
+
+    if is_metric:
+        barometer_string = f"{pressure_hpa:.2f} hPa"
+        temperature_string = f"{temp_c:.1f}° C"
+    else:
+        barometer_string = f"{pressure_hpa * 0.02953:.2f}\""
+        temp_f = (temp_c * 9.0 / 5.0) + 32.0
+        temperature_string = f"{temp_f:.1f}° F"
+
+    sensor_data = [
+        ("Altitude", altitude_to_string(altitude_m, 3, is_metric)),
+        ("Barometer", barometer_string),
+        ("Temp", temperature_string),
+        ("Lat", get_lat_string(gps)),
+        ("Long", get_lon_string(gps)),
+    ]
+
+    font_list = font_medium
+    start_y = 25
+    line_height = 18
+    if is_metric:
+        left_margin_x = 3
+        right_align_x = 220
+    else:
+        left_margin_x = 16
+        right_align_x = 209
+    display_list_names_values(sensor_data, font_list, line_height, start_y, left_margin_x, right_align_x)
+    refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
+
 
 
 def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, last_gps_fix_time, is_metric, full_refresh=False):
@@ -725,7 +761,7 @@ def main():
     local_airport_hpa = PDX_STATION_HPA
     local_airport_meters = feet_to_meters(PDX_STATION_FEET)
 
-    sea_level_pressure = calc_sea_level_pressure(local_airport_hpa, local_airport_meters)
+    sea_level_pressure = calculate_sea_level_pressure(local_airport_hpa, local_airport_meters)
     print(f"\n{local_airport_string}:")
     print(
         f" Local Airport Station: elevation={local_airport_meters:.2f}m, pressure={local_airport_hpa:.2f}, SLP={sea_level_pressure:.2f}")
@@ -849,10 +885,10 @@ def main():
                 if (current_time - last_gas_update) >= GAS_INTERVAL_SEC:
                     last_gas_update = current_time
                     print(f"\nBME680 Gas update (every {GAS_INTERVAL_SEC:.0f}s)")
-                    gas_ohms = bme.gas
+                    bme_gas_ohms = bme.gas
                     bme_percent_humidity = bme.humidity
-                    bme_iaq = calculate_iaq(gas_ohms, bme_percent_humidity)
-                    print(f"IAQ = {bme_iaq:.1f} ({iaq_quality_to_string(bme_iaq)}), {gas_ohms / 1000.0} Kohms\n")
+                    bme_iaq = calculate_iaq(bme_gas_ohms, bme_percent_humidity)
+                    print(f"IAQ = {bme_iaq:.1f} ({iaq_quality_to_string(bme_iaq)}), {bme_gas_ohms / 1000.0} Kohms\n")
                     gc.collect()
                 else:
                     # Trigger non-gas measurement to cache other BME metrics
@@ -860,7 +896,7 @@ def main():
 
                 bme_hpa = bme.pressure
                 bme_temp = bme.temperature
-                bme_meters = calc_altitude(bme_hpa, sea_level_pressure)
+                bme_meters = calculate_altitude(bme_hpa, sea_level_pressure)
                 # print(f"BME680: {bme_hpa} hpa, {bme_temp} °C, {bme_meters} m")
 
                 # Update system with BME680 metrics
@@ -875,7 +911,7 @@ def main():
             else:
                 bmp_hpa = bmp.pressure
                 bmp_temp = bmp.temperature
-                bmp_meters = calc_altitude(bmp_hpa, sea_level_pressure)
+                bmp_meters = calculate_altitude(bmp_hpa, sea_level_pressure)
 
                 # Over-write BME680 values with more accurate BMP585 values
                 sys_hpa = bmp_hpa
@@ -985,14 +1021,17 @@ if __name__ == "__main__":
 
         print(f"\nPerforming teardown [{exit_reason}]...")
 
-        # Render final barometer/altitude details screen before powering down
+        # Display final barometer, altitude, gps details screen before powering down
         try:
             print("Displaying final altitude details"
                   "...")
-            display_altimeter_details(
-                sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq,
-                is_metric, is_final=True, full_refresh=True
+            display_final_details(
+                sys_meters, sys_hpa, sys_temp,
+                is_metric,
+                gps, last_gps_fix_time,
+                full_refresh=True
             )
+
         except Exception as e:
             print(f"Error drawing final display on exit: {e}")
 
