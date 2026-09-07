@@ -17,7 +17,7 @@ Sensors used
 Functionality
     - set's system time after GPS fix established. Resets system to GPS time every 24 hours.
     - GC - garbage collection every 30min (at gas burn) and full E-Ink refresh.
-    - Pi Clock needs Wifi to establish correct time, can use GPS RTC
+    - Pi Clock needs Wi-Fi to establish correct time, can use GPS RTC
 
 Use sea level pressure at nearest airport
     * Portland updated hourly (7 min before the hour)
@@ -78,12 +78,11 @@ AIRPORTS:
      2. get_button()
      3. main() Processing Loop
 
-
 TODOS
-    * todo add warning the GPS altitude is diff than barometer
-    * TODO test with other E-Ink display to minimize code overlap
-    * TODO move E-Ink setup into main?
+    * TODO add warning the GPS altitude is diff than barometer
     * TODO put barometer metrics intro .structure like gps
+    * TODO decide how to display if fall back
+    * TODO test with other E-Ink display to minimize code overlap
 """
 
 import gc
@@ -98,13 +97,12 @@ from gpiozero import Button, RotaryEncoder
 
 from barometer_utils import calculate_sea_level_pressure, correct_bme_hpa, calculate_altitude
 # from button_rotary_utils import process_inputs, check_rotary_switch_pressed
-from gps_utils import initialize_gps
 from lib.bme680 import BME680_I2C
 from lib.bme680_utils import iaq_quality_to_string, calculate_iaq
-# from lib.eink_ssd1680_utils import init_eink_display, refresh_eink_display
 from lib.eink_ssd1680_gt911_utils import init_eink_display, refresh_eink_display, check_touch_inputs, \
     flush_touch_inputs, align_touch_point_to_display
-from lib.gps_utils import get_time_from_gps, get_map_string, get_lat_string, get_lon_string, set_pi_system_time_from_gps
+from lib.gps_utils import initialize_gps, get_time_from_gps, get_map_string, get_lat_string, get_lon_string, \
+    set_pi_system_time_from_gps
 from lib.micropython_bmpxxx import bmpxxx
 from lib.pi_zero_utils import pi_on_chip_temperature, scan_i2c_bus
 from metric_imperial_utils import feet_to_meters, metric_format, altitude_to_string, meters_to_feet
@@ -115,7 +113,7 @@ FALLBACK_SEA_LEVEL_PRESSURE = 1019.00
 
 # Portland OR, PDX
 PDX_STATION_STRING = "PDX - Portland, OR"
-PDX_STATION_HPA = 1016.54
+PDX_STATION_HPA = 1016.87
 PDX_STATION_FEET = 20.
 
 # big change night
@@ -134,17 +132,20 @@ OVER_TEMP_WARNING = 70.0
 SCREEN_WIDTH = 250
 SCREEN_HEIGHT = 122
 DISPLAY_ROTATION = 90
-TOUCH_DEBOUNCE_SEC = 0.35  # Ignore touch events within 350ms of the last trigger
+
+# Device updates
+GPS_INTERVAL_SEC = 1.0  # Read GPS metrics every 1 second
+SENSOR_INTERVAL_SEC = 1.0  # Read core pressure, temp, & other metrics every 1 second
+GAS_INTERVAL_SEC = 30.0  # Read gas IAQ metrics every 30 seconds
+SET_CLOCK_INTERVAL_SEC = 24 * 60 * 60  # Reset System time with GPS time every 24 hours
+
+# Display partial/full refresh control
+EINK_PARTIAL_REFRESH_SEC = 1.0  # Partial E-ink refresh at least every second
+EINK_MAX_PARTIAL_COUNT = 15  # count for partial refresh
+EINK_FULL_REFRESH_SEC = 180.0  # required Full refresh E-ink limit(3 minutes / 180 sec)
 
 # Timing Constants (in seconds)
 LOOP_STRETCH_SLEEP = 0.02  # 20 ms sleep each loop
-GPS_INTERVAL_SEC = 1.0  # Read GPS metrics every 1 seconds
-SENSOR_INTERVAL_SEC = 1.0  # Read core pressure, temp, & other metrics every 2 seconds
-EINK_FULL_REFRESH_SEC = 180.0  # required Full refresh E-ink limit(3 minutes / 180 sec)
-MAX_EINK_PARTIAL_REFRESH = 15  # count for partial refresh
-EINK_PARTIAL_REFRESH_SEC = 1.0  # Partial E-ink refresh at least every second
-GAS_INTERVAL_SEC = 30.0  # Read gas IAQ metrics every 30 seconds
-SET_CLOCK_INTERVAL_SEC = 24 * 60 * 60  # Every 24 hours get GPS time to reset system time
 
 implementation = [sys.implementation.name]
 
@@ -154,7 +155,7 @@ def uname():
     return [u.sysname, u.nodename, u.release, u.version, u.machine]
 
 
-# Unified button Physical and touch input handling
+# Unified button physical and touch input handling
 _pending_button = None
 _last_gpio_input_time = 0.0
 _last_touch_input_time = 0.0
@@ -187,7 +188,7 @@ def trigger_button(button_num, source):
     print(f"* {source} accepted Button {button_num}")
 
 
-def get_button():
+def get_button() -> int | None:
     """ Return the pending button event and consume it. Returns None if no button is pending. """
     global _pending_button
     button = _pending_button
@@ -263,7 +264,7 @@ def check_touch_buttons(rotation: int = DISPLAY_ROTATION):
     trigger_button(button_num, "touch")
 
 
-def i2c_initialize_bmp585_bme680(i2c1: PiZeroI2CBridge) -> tuple[BME680_I2C, BMP585, bool, bool]:
+def i2c_initialize_bmp585_bme680(i2c1: PiZeroI2CBridge):
     """
     Initialize Barometers: BMP585, BME680
 
@@ -306,11 +307,14 @@ def calibrate_bme_barometer(bme: BME680_I2C | None, bmp: BMP585 | None):
         print(f" * No BMP585 to calibrate BME680, using default {average_diff:.7f} hPa")
 
     # BME680 hPA amount over will be subtracted in calibration code.
-    bme.hpa_calibration = average_diff
-    if bme.hpa_calibration is not None:
-        print(f" * BME680 calibrated with = {average_diff:.7f} hPa")
+    if bme is not None:
+        bme.hpa_calibration = average_diff
+        if bme.hpa_calibration is not None:
+            print(f" * BME680 calibrated with = {average_diff:.7f} hPa")
+        else:
+            print(f" * ERROR IN BME680 hpa_calibration = None!")
     else:
-        print(f" * ERROR IN BME680 hpa_calibration = None!")
+        print(f" * ERROR BME680 = None!")
 
     print(" Barometers Initialization Done.")
 
@@ -335,10 +339,10 @@ def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pres
         check_touch_buttons()
         button_state = get_button()
 
-        # Button 2: Save / Exit calibration mode
+        # Button 2: Save / Exit calibration mode *** EXIT Method ***
         if button_state == 2:
             clear_pending_button()
-            return new_slp
+            return new_slp, is_metric
 
         # Button 3: Toggle metric / imperial units
         elif button_state == 3:
@@ -371,9 +375,9 @@ def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pres
             # Use Partial for fast feedback, but full after 5 to reduce ghosting
             if partial_refresh_count < 5:
                 partial_refresh_count += 1
-                display_updated_altitude_calibration(new_alt, new_slp, is_metric, partial=True)
+                display_updated_altitude_calibration(new_alt, new_slp, is_metric, full_refresh=True)
             else:
-                display_updated_altitude_calibration(new_alt, new_slp, is_metric, partial=False)
+                display_updated_altitude_calibration(new_alt, new_slp, is_metric, full_refresh=False)
                 partial_refresh_count = 0
             need_redraw = False
 
@@ -394,7 +398,7 @@ def display_list_names_values(altitude_data: list[tuple[str, str]], font_list, l
         epd_draw.text((elevation_x, current_y), elevation, font=font_list, fill=0)
 
 
-def display_altitude_reference(is_metric, partial=False):
+def display_altitude_reference(is_metric, full_refresh=False):
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
 
     epd_draw.text((3, 5), "Oregon Altitude Reference", font=font_small, fill=0)
@@ -420,11 +424,11 @@ def display_altitude_reference(is_metric, partial=False):
         right_align_x = 216
 
     display_list_names_values(altitude_data, font_list, line_height, start_y, left_margin_x, right_align_x)
-    refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
+    refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
     time.sleep(5)
 
 
-def display_updated_altitude_calibration(alt, press, is_metric, partial=False):
+def display_updated_altitude_calibration(alt, press, is_metric, full_refresh=False):
     """
     Renders current calibration values to E-Ink display.
     """
@@ -449,7 +453,7 @@ def display_updated_altitude_calibration(alt, press, is_metric, partial=False):
     press_val = f"{press:.2f}"
     epd_draw.text((60, 74), press_val, font=font_large, fill=0)
 
-    refresh_eink_display(epd_disp, epd_draw, epd_image, partial=partial)
+    refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
 
 
 def print_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric):
@@ -486,13 +490,23 @@ def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, i
 
     epd_draw.line((0, 21, 250, 21), fill=0, width=1)
 
-    if is_metric:
-        barometer_string = f"{pressure_hpa:.2f} hPa"
-        temperature_string = f"{temp_c:.1f}° C"
+    if pressure_hpa is None or temp_c is None:
+        if is_metric:
+            barometer_string = "N/A hPa"
+            temperature_string = "N/A° C"
+        else:
+            barometer_string = "N/A \""
+            temperature_string = "N/A° F"
     else:
-        barometer_string = f"{pressure_hpa * 0.02953:.2f}\""
-        temp_f = (temp_c * 9.0 / 5.0) + 32.0
-        temperature_string = f"{temp_f:.1f}° F"
+        if is_metric:
+            barometer_string = f"{pressure_hpa:.2f} hPa"
+            temperature_string = f"{temp_c:.1f}° C"
+        else:
+            barometer_string = f"{pressure_hpa * 0.02953:.2f}\""
+            temp_f = (temp_c * 9.0 / 5.0) + 32.0
+            temperature_string = f"{temp_f:.1f}° F"
+
+
     humidity_string = f"{humidity:.1f}%" if humidity is not None else "No Sensor"
     iaq_string = f"{iaq:.0f} ({iaq_quality_to_string(iaq)})" if iaq is not None else "No Sensor"
 
@@ -530,7 +544,7 @@ def print_gps_metrics(gps: GPS, time_zone_hours: int):
             print("GPS: Waiting for satellite clock...")
 
         if gps.satellites is not None:
-            print(f"# satellites: {gps.satellites}  (Fix quality: {gps.fix_quality})")
+            print(f"GPS {gps.satellites} satellites: (Fix quality: {gps.fix_quality})")
 
         map_string = get_map_string(gps)
 
@@ -543,32 +557,37 @@ def print_gps_metrics(gps: GPS, time_zone_hours: int):
     else:
         print("GPS: Waiting for satellite fix...")
 
-    if gps.altitude_m is not None:
-        if gps.vdop is not None:
-            est_altitude_string = f"+/- {gps.vdop * 4:.1f}m"
-        else:
-            est_altitude_string = "N/A (Waiting for data)"
-        print(f"GPS Altitude: {gps.altitude_m} meters  (accuracy altitude: {est_altitude_string})")
-
-    if gps.speed_knots is not None:
-        print(f"GPS Speed: {gps.speed_knots * 1.15078:.1f} mph")
-    if gps.speed_kmh is not None:
-        print(f"GPS Speed: {gps.speed_kmh} km/h")
-
-    if gps.track_angle_deg is not None:
-        if gps.speed_knots < 2.0:
-            print("GPS Heading: Unreliable, speed too low")
-        elif gps.speed_knots < 5.0:
-            print(f"GPS Heading: {gps.track_angle_deg}° (+/- 15°)")
-        else:
-            print(f"GPS Heading: {gps.track_angle_deg}° (+/- 2°)")
-
-
-def gps_clock_string(gps: GPS, time_zone_hours: int):
     if gps is not None:
-        local_time = get_time_from_gps(gps, time_zone_hours)
-        time_string = f"{local_time.tm_hour:02}:{local_time.tm_min:02}:{local_time.tm_sec:02}"
-    return time_string
+        if gps.altitude_m is not None:
+            if gps.vdop is not None:
+                est_altitude_string = f"+/- {gps.vdop * 4:.1f}m"
+            else:
+                est_altitude_string = "N/A (Waiting for data)"
+            print(f"GPS Altitude: {gps.altitude_m} meters  (accuracy altitude: {est_altitude_string})")
+
+        if gps.speed_knots is not None:
+            print(f"GPS Speed: {gps.speed_knots * 1.15078:.1f} mph")
+        if gps.speed_kmh is not None:
+            print(f"GPS Speed: {gps.speed_kmh} km/h")
+
+        if gps.track_angle_deg is not None:
+            if gps.speed_knots < 2.0:
+                print("GPS Heading: Unreliable, speed too low")
+            elif gps.speed_knots < 5.0:
+                print(f"GPS Heading: {gps.track_angle_deg}° (+/- 15°)")
+            else:
+                print(f"GPS Heading: {gps.track_angle_deg}° (+/- 2°)")
+
+
+def gps_clock_string(gps, time_zone_hours):
+    if gps is None:
+        return ""
+
+    local_time = get_time_from_gps(gps, time_zone_hours)
+    if local_time is None:
+        return ""
+
+    return f"{local_time.tm_hour:02}:{local_time.tm_min:02}:{local_time.tm_sec:02}"
 
 
 def display_gps_details(gps, last_gps_fix_time, full_refresh=False):
@@ -589,7 +608,7 @@ def display_gps_details(gps, last_gps_fix_time, full_refresh=False):
                 epd_draw.text((45, 0), "** NO FIX **", font=font_medium, fill=0)
             else:
                 minutes_since_fix = int((time.monotonic() - last_gps_fix_time) / 60)
-                epd_draw.text((42, 0), f"*FIX {minutes_since_fix}m ago*", font=font_small, fill=0)
+                epd_draw.text((42, 2), f"*FIX {minutes_since_fix}m ago*", font=font_small, fill=0)
 
         clock_string = time.strftime("%I:%M %p", time.localtime()).lower()
         clock_width = font_small.getlength(clock_string)
@@ -597,14 +616,14 @@ def display_gps_details(gps, last_gps_fix_time, full_refresh=False):
         epd_draw.line((5, 21, 250, 21), fill=0, width=1)
 
         # List of GPS metrics
-        lat_lon_xy_accuracy_str = f"+/- {gps.horizontal_dilution * 2.5: .1f}m" if gps.horizontal_dilution is not None else "N/A"
+        lat_lon_accuracy_str = f"+/- {gps.horizontal_dilution * 2.5: .1f}m" if gps.horizontal_dilution is not None else "N/A"
         alt_str = f"{gps.altitude_m:.1f}m" if gps.altitude_m is not None else "N/A"
         speed_str = f"{gps.speed_knots * 1.15078:.1f} mph" if gps.speed_knots is not None else "0.0 mph"
 
         sensor_data = [
             ("Lat", get_lat_string(gps)),
             ("Long", get_lon_string(gps)),
-            ("XY Accuracy", lat_lon_xy_accuracy_str),
+            ("Accuracy", lat_lon_accuracy_str),
             ("Altitude", alt_str),
             ("Speed", speed_str),
         ]
@@ -659,26 +678,28 @@ def display_final_details(altitude_m, pressure_hpa, temp_c, is_metric, gps, last
 
 
 def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, last_gps_fix_time, is_metric, full_refresh=False):
-    """
-    Display main dashboard
-    :param last_gps_fix_time: Timestamp (monotonic) of last valid GPS fix
-    """
+    """ Display main dashboard """
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
 
     # title
     # epd_draw.text((1, 5), "Altimeter & GPS", font=font_small, fill=0)
 
     convert, unit = metric_format(is_metric)
-    if is_metric:
-        alt_string = f"{altitude_m * convert:.1f}"
+    alt_metric_string = f"{unit}"
+    if pressure_hpa is None or altitude_m is None:
+        alt_string = "N/A"
+        press_string = "N/A"
         long_alt_num_width = font_biggest.getlength("9999.9")
     else:
-        alt_string = f"{altitude_m * convert:.1f}"
-        long_alt_num_width = font_biggest.getlength("99999.9")
+        if is_metric:
+            alt_string = f"{altitude_m * convert:.1f}"
+            long_alt_num_width = font_biggest.getlength("9999.9")
+        else:
+            alt_string = f"{altitude_m * convert:.1f}"
+            long_alt_num_width = font_biggest.getlength("99999.9")
+        alt_num_width = font_biggest.getlength(alt_string)
 
-    alt_num_width = font_biggest.getlength(alt_string)
-    alt_metric_string = f"{unit}"
-    press_string = f"{pressure_hpa:.2f}"
+        press_string = f"{pressure_hpa:.2f}"
 
     epd_draw.text((2, 19), "Alt", font=font_small, fill=0)
     epd_draw.text((36 + long_alt_num_width - alt_num_width, 0), alt_string, font=font_biggest, fill=0)
@@ -738,7 +759,6 @@ def main():
     global i2c1, sea_level_pressure, slp_hpa_bmp585, slp_hpa_bme680, sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric, gps, last_gps_fix_time
 
     is_metric = True
-    warning_toggle = 0
 
     print("\nStarting...")
     print("=================================================")
@@ -764,6 +784,8 @@ def main():
         f" Local Airport Station: elevation={local_airport_meters:.2f}m, pressure={local_airport_hpa:.2f}, SLP={sea_level_pressure:.2f}")
 
     # Adjust SLP with calibration constant for BMP585
+    # The value is the output of calibrate_bmp585_bme680_known_alt, it must be
+    # subtracted from SLP.
     sea_level_pressure -= (-0.6634)
     print(f"Corrected SLP with calibration: {sea_level_pressure:.2f} hpa")
 
@@ -812,9 +834,6 @@ def main():
     time_zone_hours = -7
     time_zone_string = "PDX"
     day_light_savings_string = "DST"
-
-    prev_alt = None
-    prev_press = None
 
     # E-Ink Display
     display_mode = 0
@@ -867,7 +886,7 @@ def main():
 
             # Button 2: Altitude/SLP Calibration Mode
             elif button_state == 2:
-                sea_level_pressure = adjust_altitude_slp(
+                sea_level_pressure, is_metric = adjust_altitude_slp(
                     gps=gps,
                     is_metric=is_metric,
                     altitude_m=sys_meters,
@@ -895,59 +914,91 @@ def main():
         if (current_time - last_sensor_update) >= SENSOR_INTERVAL_SEC or first_run:
             last_sensor_update = current_time
 
+            # Also check Pi on-chip temperature for over temp
             temp = pi_on_chip_temperature()
             if temp > OVER_TEMP_WARNING:
                 print(f"WARNING: Pi Zero on-chip temp = {temp:.1f}° C")
 
-            if error_bme680 or bme is None:
-                print(f"No lower-precision Altitude BME680 sensor: {error_bme680}\n")
-            else:
-                bme_percent_humidity = bme.humidity
+            # Default reset state for this update
+            bmp_ok = False
+            bme_ok = False
+            sensor_mode = "NONE"
 
-                # IAQ Readings (Every GAS_INTERVAL_SEC)
-                if (current_time - last_gas_update) >= GAS_INTERVAL_SEC or bme_gas_ohms is None:
-                    last_gas_update = current_time
-                    print(f"\nBME680 Gas update (every {GAS_INTERVAL_SEC:.0f}s)")
-                    bme_gas_ohms = bme.gas
-                    gc.collect()
+            # BME680 Read (Secondary pressure & temp, primary IAQ & humidity)
+            if not error_bme680 and bme is not None:
+                try:
+                    bme_hpa = bme.pressure
+                    bme_temp = bme.temperature
+                    bme_percent_humidity = bme.humidity
+                    bme_ok = True
 
-                if bme_gas_ohms is not None and bme_percent_humidity is not None:
-                    bme_iaq = calculate_iaq(bme_gas_ohms, bme_percent_humidity)
+                    # IAQ Gas polling interval
+                    if (current_time - last_gas_update) >= GAS_INTERVAL_SEC or bme_gas_ohms is None:
+                        last_gas_update = current_time
+                        print(f"\nBME680 Gas update (every {GAS_INTERVAL_SEC:.0f}s)")
+                        bme_gas_ohms = bme.gas
 
-                bme_hpa = bme.pressure
-                bme_temp = bme.temperature
-                bme_meters = calculate_altitude(bme_hpa, sea_level_pressure)
+                    if bme_gas_ohms is not None and bme_percent_humidity is not None:
+                        bme_iaq = calculate_iaq(bme_gas_ohms, bme_percent_humidity)
 
-                sys_hpa = bme_hpa
-                sys_temp = bme_temp
-                sys_meters = bme_meters
-                sys_humidity = bme_percent_humidity
-                sys_iaq = bme_iaq
+                    sys_humidity = bme_percent_humidity
+                    sys_iaq = bme_iaq
+                except Exception as e:
+                    print(f"Error reading BME680: {e}")
+                    error_bme680 = True
 
-            if error_bmp585 or bmp is None:
-                print(f"No high-precision Altitude bmp585 sensor\n")
-            else:
-                bmp_hpa = bmp.pressure
-                bmp_temp = bmp.temperature
-                bmp_meters = calculate_altitude(bmp_hpa, sea_level_pressure)
+            # BMP585 Read (Primary high-precision pressure & temperature)
+            if not error_bmp585 and bmp is not None:
+                try:
+                    bmp_hpa = bmp.pressure
+                    bmp_temp = bmp.temperature
+                    bmp_ok = True
+                except Exception as e:
+                    print(f"Error reading BMP585: {e}")
+                    error_bmp585 = True
 
+            # Fallback Hierarchy
+            if bmp_ok:
+                # Primary Mode: BMP585 High Precision
                 sys_hpa = bmp_hpa
                 sys_temp = bmp_temp
-                sys_meters = bmp_meters
+                sys_meters = calculate_altitude(sys_hpa, sea_level_pressure)
+                sensor_mode = "BMP"
+            elif bme_ok:
+                # Fallback Mode: BME680
+                sys_hpa = bme_hpa
+                sys_temp = bme_temp
+                sys_meters = calculate_altitude(sys_hpa, sea_level_pressure)
+                sensor_mode = "BME"
+            else:
+                # Neither sensor available
+                sys_hpa = None
+                sys_temp = None
+                sys_meters = None
+                sensor_mode = "NONE"
+
+            # TODO decide how to display if fall back
+            """
+            def draw_sensor_status_banner(draw, sensor_mode, font):
+                if sensor_mode == "BME":
+                    # Draw a inverted text badge indicating BME fallback
+                    draw.rectangle((170, 2, 248, 18), fill=0)
+                    draw.text((174, 4), "ALT [BME]", font=font, fill=255)
+                elif sensor_mode == "NONE":
+                    draw.rectangle((170, 2, 248, 18), fill=0)
+                    draw.text((174, 4), "NO SENSOR", font=font, fill=255)
+            """
 
             print_altimeter_details(sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric)
-
-            if first_run:
-                first_run = False
-                display_mode = 0
-                full_refresh_mode = True  # First draw is a Full Refresh
 
         # GPS UART Buffer Drain (Runs every loop iteration)
         # -----------------------------------------------------------------
         if gps is not None:
-            if gps.update():
-                if gps.has_fix:
-                    last_gps_fix_time = current_time
+            gps.update()
+
+            # also update fix time
+            if gps.has_fix:
+                last_gps_fix_time = time.monotonic()
 
         # GPS data collection / Clock Sync Interval (Every GPS_INTERVAL_SEC)
         # -----------------------------------------------------------------
@@ -966,18 +1017,24 @@ def main():
                     minutes_since_fix = int((current_time - last_gps_fix_time) / 60)
                     print(f"...Waiting for GPS fix ({minutes_since_fix} min since last fix)")
 
+            # Set flag to synchronize clock time every SET_CLOCK_INTERVAL_SEC (typically 24 hours)
+            # -----------------------------------------------------------------
             if (current_time - last_clock_set_update) >= SET_CLOCK_INTERVAL_SEC:
                 sync_time_requested = True
 
         # E-Ink Display Refresh
         # full_refresh_mode is tri-state: None, False (partial update), True (full update)
         # -----------------------------------------------------------------
+        if first_run:
+            first_run = False
+            display_mode = 0
+            full_refresh_mode = True  # First draw is a Full Refresh
 
         # Evaluate if refresh needed and if it should be FULL or PARTIAL
         if full_refresh_mode is None:
             # No button pressed: check if a timed update is due
             if (current_time - last_partial_refresh_eink_update) >= EINK_PARTIAL_REFRESH_SEC:
-                if (eink_partial_refresh_count >= MAX_EINK_PARTIAL_REFRESH or
+                if (eink_partial_refresh_count >= EINK_MAX_PARTIAL_COUNT or
                         (current_time - last_full_refresh_eink_update) >= EINK_FULL_REFRESH_SEC):
                     full_refresh_mode = True
                 else:
