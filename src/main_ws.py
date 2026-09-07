@@ -109,6 +109,17 @@ from metric_imperial_utils import feet_to_meters, metric_format, altitude_to_str
 from micropython_bmpxxx.bmpxxx import BMP585
 from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 
+from dataclasses import dataclass
+
+@dataclass
+class SensorTelemetry:
+    altitude_m: float | None = None
+    pressure_hpa: float | None = None
+    temperature_c: float | None = None
+    humidity: float | None = None
+    iaq: float | None = None
+    sensor_mode: str = "NONE"  # "BMP", "BME", or "NONE"
+
 FALLBACK_SEA_LEVEL_PRESSURE = 1019.00
 
 # Portland OR, PDX
@@ -148,6 +159,13 @@ EINK_FULL_REFRESH_SEC = 180.0  # required Full refresh E-ink limit(3 minutes / 1
 LOOP_STRETCH_SLEEP = 0.02  # 20 ms sleep each loop
 
 implementation = [sys.implementation.name]
+
+# Declare Global defaults
+sens = SensorTelemetry()
+i2c1 = None
+gps = None
+last_gps_fix_time = None
+is_metric = True
 
 
 def uname():
@@ -393,7 +411,7 @@ def display_list_names_values(altitude_data: list[tuple[str, str]], font_list, l
         epd_draw.text((left_margin_x, current_y), location, font=font_list, fill=0)
 
         # Right align text
-        text_width = font_small.getlength(elevation)
+        text_width = font_list.getlength(elevation)
         elevation_x = right_align_x - text_width
         epd_draw.text((elevation_x, current_y), elevation, font=font_list, fill=0)
 
@@ -456,21 +474,30 @@ def display_updated_altitude_calibration(alt, press, is_metric, full_refresh=Fal
     refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
 
 
-def print_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric):
+def print_altimeter_details(sens: SensorTelemetry, is_metric):
     print("=" * 40)
-    clock_string = time.strftime("%I:%M %p", time.localtime()).lower()
 
-    if is_metric:
-        altitude_string = f"{altitude_m:.3f}m"
-        barometer_string = f"{pressure_hpa:.2f} hPa"
-        temperature_string = f"{temp_c:.1f}° C"
+    if sens.altitude_m is None or sens.pressure_hpa is None or sens.temperature_c is None:
+        if is_metric:
+            altitude_string = f"N/A m"
+            barometer_string = f"N/A hPa"
+            temperature_string = f"N/A° C"
+        else:
+            altitude_string = f"N/A m"
+            barometer_string = f"N/A \""
+            temperature_string = f"N/A° F"
     else:
-        altitude_string = f"{meters_to_feet(altitude_m):.3f}'  ({altitude_m:.3f}m)"
-        barometer_string = f"{pressure_hpa * 0.02953:.2f}\"  ({pressure_hpa:.2f} hPa)"
-        temp_f = (temp_c * 9.0 / 5.0) + 32.0
-        temperature_string = f"{temp_f:.1f}° F  ({temp_c:.1f}° C)"
-    humidity_string = f"{humidity:.1f}%" if humidity is not None else "No Data"
-    iaq_string = f"{iaq:.0f} ({iaq_quality_to_string(iaq)})" if iaq is not None else "No Data"
+        if is_metric:
+            altitude_string = f"{sens.altitude_m:.3f}m"
+            barometer_string = f"{sens.pressure_hpa:.2f} hPa"
+            temperature_string = f"{sens.temperature_c:.1f}° C"
+        else:
+            altitude_string = f"{meters_to_feet(sens.altitude_m):.3f}'  ({sens.altitude_m:.3f}m)"
+            barometer_string = f"{sens.pressure_hpa * 0.02953:.2f}\"  ({sens.pressure_hpa:.2f} hPa)"
+            temp_f = (sens.temperature_c * 9.0 / 5.0) + 32.0
+            temperature_string = f"{temp_f:.1f}° F  ({sens.temperature_c:.1f}° C)"
+    humidity_string = f"{sens.humidity:.1f}%" if sens.humidity is not None else "No Data"
+    iaq_string = f"{sens.iaq:.0f} ({iaq_quality_to_string(sens.iaq)})" if sens.iaq is not None else "No Data"
 
     print(f"Altitude: {altitude_string}")
     print(f"Barometer: {barometer_string}")
@@ -479,7 +506,7 @@ def print_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_
     print(f"IAQ {iaq_string}")
 
 
-def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, is_metric, is_final=False,
+def display_altimeter_details(sens: SensorTelemetry, is_metric, is_final=False,
                               full_refresh=False):
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
 
@@ -490,7 +517,7 @@ def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, i
 
     epd_draw.line((0, 21, 250, 21), fill=0, width=1)
 
-    if pressure_hpa is None or temp_c is None:
+    if sens.pressure_hpa is None or sens.temperature_c is None:
         if is_metric:
             barometer_string = "N/A hPa"
             temperature_string = "N/A° C"
@@ -499,19 +526,19 @@ def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, i
             temperature_string = "N/A° F"
     else:
         if is_metric:
-            barometer_string = f"{pressure_hpa:.2f} hPa"
-            temperature_string = f"{temp_c:.1f}° C"
+            barometer_string = f"{sens.pressure_hpa:.2f} hPa"
+            temperature_string = f"{sens.temperature_c:.1f}° C"
         else:
-            barometer_string = f"{pressure_hpa * 0.02953:.2f}\""
-            temp_f = (temp_c * 9.0 / 5.0) + 32.0
+            barometer_string = f"{sens.pressure_hpa * 0.02953:.2f}\""
+            temp_f = (sens.temperature_c * 9.0 / 5.0) + 32.0
             temperature_string = f"{temp_f:.1f}° F"
 
 
-    humidity_string = f"{humidity:.1f}%" if humidity is not None else "No Sensor"
-    iaq_string = f"{iaq:.0f} ({iaq_quality_to_string(iaq)})" if iaq is not None else "No Sensor"
+    humidity_string = f"{sens.humidity:.1f}%" if sens.humidity is not None else "No Sensor"
+    iaq_string = f"{sens.iaq:.0f} ({iaq_quality_to_string(sens.iaq)})" if sens.iaq is not None else "No Sensor"
 
     sensor_data = [
-        ("Altitude", altitude_to_string(altitude_m, 3, is_metric)),
+        ("Altitude", altitude_to_string(sens.altitude_m, 3, is_metric)),
         ("Barometer", barometer_string),
         ("Temp", temperature_string),
         ("Humidity", humidity_string),
@@ -638,7 +665,7 @@ def display_gps_details(gps, last_gps_fix_time, full_refresh=False):
         flush_touch_inputs()
 
 
-def display_final_details(altitude_m, pressure_hpa, temp_c, is_metric, gps, last_gps_fix_time, full_refresh=False):
+def display_final_details(sens: SensorTelemetry, is_metric, gps, last_gps_fix_time, full_refresh=False):
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
 
     epd_draw.text((3, 3), "Altimeter", font=font_small, fill=0)
@@ -648,16 +675,26 @@ def display_final_details(altitude_m, pressure_hpa, temp_c, is_metric, gps, last
 
     epd_draw.line((0, 21, 250, 21), fill=0, width=1)
 
-    if is_metric:
-        barometer_string = f"{pressure_hpa:.2f} hPa"
-        temperature_string = f"{temp_c:.1f}° C"
+    if sens.altitude_m is None or sens.pressure_hpa is None or sens.temperature_c is None:
+        if is_metric:
+            altitude_string = f"N/A m"
+            barometer_string = f"N/A hPa"
+            temperature_string = f"N/A° C"
+        else:
+            altitude_string = f"N/A m"
+            barometer_string = f"N/A \""
+            temperature_string = f"N/A° F"
     else:
-        barometer_string = f"{pressure_hpa * 0.02953:.2f}\""
-        temp_f = (temp_c * 9.0 / 5.0) + 32.0
-        temperature_string = f"{temp_f:.1f}° F"
+        if is_metric:
+            barometer_string = f"{sens.pressure_hpa:.2f} hPa"
+            temperature_string = f"{sens.temperature_c:.1f}° C"
+        else:
+            barometer_string = f"{sens.pressure_hpa * 0.02953:.2f}\""
+            temp_f = (sens.temperature_c * 9.0 / 5.0) + 32.0
+            temperature_string = f"{temp_f:.1f}° F"
 
     sensor_data = [
-        ("Altitude", altitude_to_string(altitude_m, 3, is_metric)),
+        ("Altitude", altitude_to_string(sens.altitude_m, 3, is_metric)),
         ("Barometer", barometer_string),
         ("Temp", temperature_string),
         ("Lat", get_lat_string(gps)),
@@ -677,7 +714,7 @@ def display_final_details(altitude_m, pressure_hpa, temp_c, is_metric, gps, last
     refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
 
 
-def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, last_gps_fix_time, is_metric, full_refresh=False):
+def display_big_dashboard(sens, gps, last_gps_fix_time, is_metric, full_refresh=False):
     """ Display main dashboard """
     epd_draw.rectangle((0, 0, 250, 122), fill=255)
 
@@ -686,20 +723,20 @@ def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, last_gps_fix_time,
 
     convert, unit = metric_format(is_metric)
     alt_metric_string = f"{unit}"
-    if pressure_hpa is None or altitude_m is None:
+    if sens.pressure_hpa is None or sens.altitude_m is None:
         alt_string = "N/A"
         press_string = "N/A"
-        long_alt_num_width = font_biggest.getlength("9999.9")
+        long_alt_num_width = font_biggest.getlength(alt_string)
     else:
         if is_metric:
-            alt_string = f"{altitude_m * convert:.1f}"
+            alt_string = f"{sens.altitude_m * convert:.1f}"
             long_alt_num_width = font_biggest.getlength("9999.9")
         else:
-            alt_string = f"{altitude_m * convert:.1f}"
+            alt_string = f"{sens.altitude_m * convert:.1f}"
             long_alt_num_width = font_biggest.getlength("99999.9")
         alt_num_width = font_biggest.getlength(alt_string)
 
-        press_string = f"{pressure_hpa:.2f}"
+        press_string = f"{sens.pressure_hpa:.2f}"
 
     epd_draw.text((2, 19), "Alt", font=font_small, fill=0)
     epd_draw.text((36 + long_alt_num_width - alt_num_width, 0), alt_string, font=font_biggest, fill=0)
@@ -741,13 +778,13 @@ def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, last_gps_fix_time,
         epd_draw.text((55, 95), "NO GPS Sensor", font=font_medium, fill=0)
 
     # Display IAQ warning box, if poor or worse at bottom right of big display 0 mode
-    if iaq and iaq > 100.0:
+    if sens.iaq and sens.iaq > 100.0:
         epd_draw.rectangle((206, 90, 250, 122), fill=0)
-        if iaq >= 200.0:
+        if sens.iaq >= 200.0:
             epd_draw.text((216, 90), "vile", font=font_small, fill=255)
-        elif iaq >= 150.0:
+        elif sens.iaq >= 150.0:
             epd_draw.text((214, 90), "bad", font=font_small, fill=255)
-        elif iaq >= 100.0:
+        elif sens.iaq >= 100.0:
             epd_draw.text((209, 90), "poor", font=font_small, fill=255)
         epd_draw.text((210, 104), "IAQ !", font=font_small, fill=255)
 
@@ -756,9 +793,7 @@ def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, last_gps_fix_time,
 
 # Main ============================================================================
 def main():
-    global i2c1, sea_level_pressure, slp_hpa_bmp585, slp_hpa_bme680, sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric, gps, last_gps_fix_time
-
-    is_metric = True
+    global i2c1, sens, is_metric, gps, last_gps_fix_time
 
     print("\nStarting...")
     print("=================================================")
@@ -821,14 +856,7 @@ def main():
     last_gps_fix_time = None
 
     # Initialize metrics
-    sys_meters = 0.0
-    sys_hpa = 1013.25
-    sys_temp = 20.0
     bme_gas_ohms = None
-    bme_percent_humidity = None
-    bme_iaq = None
-    sys_iaq = None
-    sys_humidity = None
 
     # GPS - PDX DST -7 hours
     time_zone_hours = -7
@@ -889,8 +917,8 @@ def main():
                 sea_level_pressure, is_metric = adjust_altitude_slp(
                     gps=gps,
                     is_metric=is_metric,
-                    altitude_m=sys_meters,
-                    pressure_hpa=sys_hpa,
+                    altitude_m=sens.altitude_m,
+                    pressure_hpa=sens.pressure_hpa,
                     sea_level_pressure_hpa=sea_level_pressure,
                 )
                 # Flush residual buttons/touch queued this processing
@@ -939,10 +967,9 @@ def main():
                         bme_gas_ohms = bme.gas
 
                     if bme_gas_ohms is not None and bme_percent_humidity is not None:
-                        bme_iaq = calculate_iaq(bme_gas_ohms, bme_percent_humidity)
+                        sens.iaq = calculate_iaq(bme_gas_ohms, bme_percent_humidity)
 
-                    sys_humidity = bme_percent_humidity
-                    sys_iaq = bme_iaq
+                    sens.humidity = bme_percent_humidity
                 except Exception as e:
                     print(f"Error reading BME680: {e}")
                     error_bme680 = True
@@ -960,21 +987,21 @@ def main():
             # Fallback Hierarchy
             if bmp_ok:
                 # Primary Mode: BMP585 High Precision
-                sys_hpa = bmp_hpa
-                sys_temp = bmp_temp
-                sys_meters = calculate_altitude(sys_hpa, sea_level_pressure)
+                sens.pressure_hpa = bmp_hpa
+                sens.temperature_c = bmp_temp
+                sens.altitude_m = calculate_altitude(sens.pressure_hpa, sea_level_pressure)
                 sensor_mode = "BMP"
             elif bme_ok:
                 # Fallback Mode: BME680
-                sys_hpa = bme_hpa
-                sys_temp = bme_temp
-                sys_meters = calculate_altitude(sys_hpa, sea_level_pressure)
+                sens.pressure_hpa = bme_hpa
+                sens.temperature_c = bme_temp
+                sens.altitude_m = calculate_altitude(sens.pressure_hpa, sea_level_pressure)
                 sensor_mode = "BME"
             else:
                 # Neither sensor available
-                sys_hpa = None
-                sys_temp = None
-                sys_meters = None
+                sens.pressure_hpa = None
+                sens.temperature_c= None
+                sens.altitude_m = None
                 sensor_mode = "NONE"
 
             # TODO decide how to display if fall back
@@ -989,7 +1016,7 @@ def main():
                     draw.text((174, 4), "NO SENSOR", font=font, fill=255)
             """
 
-            print_altimeter_details(sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric)
+            print_altimeter_details(sens, is_metric)
 
         # GPS UART Buffer Drain (Runs every loop iteration)
         # -----------------------------------------------------------------
@@ -1052,13 +1079,12 @@ def main():
 
             if display_mode == 0:
                 display_big_dashboard(
-                    sys_meters, sys_hpa, sys_iaq, gps, last_gps_fix_time,
+                    sens, gps, last_gps_fix_time,
                     is_metric, full_refresh=full_refresh_mode
                 )
             elif display_mode == 1:
                 display_altimeter_details(
-                    sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq,
-                    is_metric, is_final=False, full_refresh=full_refresh_mode
+                    sens, is_metric, is_final=False, full_refresh=full_refresh_mode
                 )
             elif display_mode == 2:
                 display_gps_details(
@@ -1103,7 +1129,7 @@ if __name__ == "__main__":
             print("Displaying final altitude details"
                   "...")
             display_final_details(
-                sys_meters, sys_hpa, sys_temp,
+                sens,
                 is_metric,
                 gps, last_gps_fix_time,
                 full_refresh=True
@@ -1123,7 +1149,7 @@ if __name__ == "__main__":
 
         # I2C Teardown
         try:
-            if 'i2c1' in globals() and i2c1 is not None:
+            if i2c1 is not None and 'i2c1' in globals():
                 i2c1.close()
         except Exception as e:
             print(f"Failed to close I2C: {e}")
