@@ -41,6 +41,7 @@ Methods:
 """
 import gc
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -276,7 +277,7 @@ MAX_PARTIAL_REFRESHES = 15
 _gt911_driver = None
 
 
-def init_eink_display():
+def init_eink_display(splash_path="../assets/images/eink-splash-015.jpg"):
     global epd_disp, epd_image, epd_draw, _gt911_driver
 
     logger.info("Initializing E-Ink display and GT911 touch hardware...")
@@ -287,7 +288,23 @@ def init_eink_display():
     reset_gt911()
     _gt911_driver = GT911Touch(bus_num=1)
 
-    epd_image = Image.new('1', (VIRTUAL_WIDTH, VIRTUAL_HEIGHT), FILL_WHITE)
+    # Load JPG/PNG splash image if provided, otherwise fall back to a blank canvas
+    if splash_path and os.path.exists(splash_path):
+        logger.info(f"Loading E-ink splash image: {splash_path}")
+        print(f" * Loading E-ink splash image: {splash_path}")
+        with Image.open(splash_path) as img:
+            # Resize/crop to fit display resolution (VIRTUAL_WIDTH, VIRTUAL_HEIGHT)
+            img_resized = img.resize((VIRTUAL_WIDTH, VIRTUAL_HEIGHT), Image.Resampling.LANCZOS)
+
+            # Convert to 1-bit monochrome (1 = white, 0 = black)
+            # Image.DITHER.NONE prevents speckling on solid text/graphics in JPGs
+            epd_image = img_resized.convert('1', dither=Image.Dither.NONE)
+    else:
+        logger.info("No splash image found. Initializing blank canvas.")
+        print("No splash image found. Initializing blank canvas.")
+        epd_image = Image.new('1', (VIRTUAL_WIDTH, VIRTUAL_HEIGHT), FILL_WHITE)
+
+    # FIXED: Always initialize epd_draw regardless of whether splash image was loaded
     epd_draw = ImageDraw.Draw(epd_image)
 
     epd_disp.displayPartBaseImage(get_rotated_buffer(epd_image))
@@ -357,9 +374,12 @@ def erase_sleep_eink(display=None, clear=False):
 
             target_epd.sleep()
 
+            # Guard Dev_exit call so errors don't obscure sleep
             if hasattr(target_epd, 'Dev_exit'):
-                target_epd.Dev_exit()
-
+                try:
+                    target_epd.Dev_exit()
+                except Exception as dev_err:
+                    logger.debug(f"Dev_exit cleanup note: {dev_err}")
 
         except Exception as e:
             logger.error(f"Warning during E-Ink cleanup: {e}")
