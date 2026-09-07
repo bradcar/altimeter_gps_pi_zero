@@ -115,20 +115,18 @@ FALLBACK_SEA_LEVEL_PRESSURE = 1019.00
 
 # Portland OR, PDX
 PDX_STATION_STRING = "PDX - Portland, OR"
-PDX_STATION_HPA = 1014.50
+PDX_STATION_HPA = 1016.54
 PDX_STATION_FEET = 20.
 
 # big change night
 # Altitude: 471.295'  (143.651m).  Barometer: 29.38"  (995.05 hPa). PDX_STATION_HPA = 1010.78
 # Altitude: 351.643'  (107.181m).  Barometer: 29.38"  (995.03 hPa). PDX_STATION_HPA = 1006.38
 
-#Altitude: 348.288'  (106.158m)  Barometer: 29.46"  (997.49 hPa)
+# Altitude: 348.288'  (106.158m)  Barometer: 29.46"  (997.49 hPa)
 
 # Hawthorne NV, HTH
 HTH_STATION_HPA = 870.00
 HTH_STATION_FEET = 4230.
-
-
 
 DEBUG = True
 OVER_TEMP_WARNING = 70.0
@@ -139,7 +137,7 @@ DISPLAY_ROTATION = 90
 TOUCH_DEBOUNCE_SEC = 0.35  # Ignore touch events within 350ms of the last trigger
 
 # Timing Constants (in seconds)
-LOOP_STRETCH_SLEEP = 0.2  # Small sleep each loop
+LOOP_STRETCH_SLEEP = 0.02  # 20 ms sleep each loop
 GPS_INTERVAL_SEC = 1.0  # Read GPS metrics every 1 seconds
 SENSOR_INTERVAL_SEC = 1.0  # Read core pressure, temp, & other metrics every 2 seconds
 EINK_FULL_REFRESH_SEC = 180.0  # required Full refresh E-ink limit(3 minutes / 180 sec)
@@ -520,16 +518,19 @@ def display_altimeter_details(altitude_m, pressure_hpa, temp_c, humidity, iaq, i
 
 
 def print_gps_metrics(gps: GPS, time_zone_hours: int):
-    print("-" * 40)  # Print a separator line.
+    print("--- GPS FIX " + "-" * 28)  # Print a separator line.
 
     if gps is not None and gps.has_fix:
         local_time = get_time_from_gps(gps, time_zone_hours)
         if local_time and getattr(local_time, "tm_hour", None) is not None:
             print(
-                f"PDX DST: {local_time.tm_mon}/{local_time.tm_mday}/{local_time.tm_year} {local_time.tm_hour:02}:{local_time.tm_min:02}:{local_time.tm_sec:02}"
+                f"GPS Time: PDX DST {local_time.tm_mon}/{local_time.tm_mday}/{local_time.tm_year} {local_time.tm_hour:02}:{local_time.tm_min:02}:{local_time.tm_sec:02}"
             )
         else:
             print("GPS: Waiting for satellite clock...")
+
+        if gps.satellites is not None:
+            print(f"# satellites: {gps.satellites}  (Fix quality: {gps.fix_quality})")
 
         map_string = get_map_string(gps)
 
@@ -538,7 +539,7 @@ def print_gps_metrics(gps: GPS, time_zone_hours: int):
         else:
             accuracy_string = "accuracy unknown"
 
-        print(f"Map string: {map_string}  (accuracy: {accuracy_string})")
+        print(f"GPS Map string: {map_string}  (accuracy location: {accuracy_string})")
     else:
         print("GPS: Waiting for satellite fix...")
 
@@ -547,23 +548,20 @@ def print_gps_metrics(gps: GPS, time_zone_hours: int):
             est_altitude_string = f"+/- {gps.vdop * 4:.1f}m"
         else:
             est_altitude_string = "N/A (Waiting for data)"
-        print(f"Altitude: {gps.altitude_m} meters  (accuracy: {est_altitude_string})")
+        print(f"GPS Altitude: {gps.altitude_m} meters  (accuracy altitude: {est_altitude_string})")
 
     if gps.speed_knots is not None:
-        print(f"Speed: {gps.speed_knots * 1.15078:.1f} mph")
+        print(f"GPS Speed: {gps.speed_knots * 1.15078:.1f} mph")
     if gps.speed_kmh is not None:
-        print(f"Speed: {gps.speed_kmh} km/h")
-
-    if gps.satellites is not None:
-        print(f"# satellites: {gps.satellites}  (Fix quality: {gps.fix_quality})")
+        print(f"GPS Speed: {gps.speed_kmh} km/h")
 
     if gps.track_angle_deg is not None:
         if gps.speed_knots < 2.0:
-            print("Heading - Unreliable, speed too low")
+            print("GPS Heading: Unreliable, speed too low")
         elif gps.speed_knots < 5.0:
-            print(f"Heading: {gps.track_angle_deg}° (+/- 15°)")
+            print(f"GPS Heading: {gps.track_angle_deg}° (+/- 15°)")
         else:
-            print(f"Heading: {gps.track_angle_deg}° (+/- 2°)")
+            print(f"GPS Heading: {gps.track_angle_deg}° (+/- 2°)")
 
 
 def gps_clock_string(gps: GPS, time_zone_hours: int):
@@ -591,7 +589,7 @@ def display_gps_details(gps, last_gps_fix_time, full_refresh=False):
                 epd_draw.text((45, 0), "** NO FIX **", font=font_medium, fill=0)
             else:
                 minutes_since_fix = int((time.monotonic() - last_gps_fix_time) / 60)
-                epd_draw.text((45, 0), f"*FIX ({minutes_since_fix}m ago)*", font=font_small, fill=0)
+                epd_draw.text((42, 0), f"*FIX {minutes_since_fix}m ago*", font=font_small, fill=0)
 
         clock_string = time.strftime("%I:%M %p", time.localtime()).lower()
         clock_width = font_small.getlength(clock_string)
@@ -599,14 +597,14 @@ def display_gps_details(gps, last_gps_fix_time, full_refresh=False):
         epd_draw.line((5, 21, 250, 21), fill=0, width=1)
 
         # List of GPS metrics
-        accuracy_str = f"+/- {gps.vdop * 4:.1f}m" if gps.vdop is not None else "N/A"
+        lat_lon_xy_accuracy_str = f"+/- {gps.horizontal_dilution * 2.5: .1f}m" if gps.horizontal_dilution is not None else "N/A"
         alt_str = f"{gps.altitude_m:.1f}m" if gps.altitude_m is not None else "N/A"
         speed_str = f"{gps.speed_knots * 1.15078:.1f} mph" if gps.speed_knots is not None else "0.0 mph"
 
         sensor_data = [
             ("Lat", get_lat_string(gps)),
             ("Long", get_lon_string(gps)),
-            ("Accuracy", accuracy_str),
+            ("XY Accuracy", lat_lon_xy_accuracy_str),
             ("Altitude", alt_str),
             ("Speed", speed_str),
         ]
@@ -658,7 +656,6 @@ def display_final_details(altitude_m, pressure_hpa, temp_c, is_metric, gps, last
         right_align_x = 209
     display_list_names_values(sensor_data, font_list, line_height, start_y, left_margin_x, right_align_x)
     refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
-
 
 
 def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, last_gps_fix_time, is_metric, full_refresh=False):
@@ -738,7 +735,7 @@ def display_big_dashboard(altitude_m, pressure_hpa, iaq, gps, last_gps_fix_time,
 
 # Main ============================================================================
 def main():
-    global i2c1, sea_level_pressure, slp_hpa_bmp585, slp_hpa_bme680, sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric
+    global i2c1, sea_level_pressure, slp_hpa_bmp585, slp_hpa_bme680, sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric, gps, last_gps_fix_time
 
     is_metric = True
     warning_toggle = 0
@@ -752,7 +749,7 @@ def main():
 
     i2c1 = PiZeroI2CBridge("/dev/i2c-1")
     scan_i2c_bus(i2c1)
-    bmp, bme, error_bmp585, error_bme680, = i2c_initialize_bmp585_bme680(i2c1)
+    bmp, bme, error_bmp585, error_bme680 = i2c_initialize_bmp585_bme680(i2c1)
 
     sea_level_pressure = FALLBACK_SEA_LEVEL_PRESSURE
 
@@ -768,7 +765,7 @@ def main():
 
     # Adjust SLP with calibration constant for BMP585
     sea_level_pressure -= (-0.6634)
-    print(f"Corrected SLP with calibration: {sea_level_pressure:.2f}m")
+    print(f"Corrected SLP with calibration: {sea_level_pressure:.2f} hpa")
 
     # try:
     #     with open("last-sea-level-pressure.txt", "r") as data_file:
@@ -794,8 +791,10 @@ def main():
 
     current_time = time.monotonic()
     last_sensor_update = 0.0  # Force sensor update on the first loop
-    # Initialize all update timers to current time
-    last_gas_update = last_partial_refresh_eink_update = last_full_refresh_eink_update = last_gps_update = last_clock_set_update = current_time
+    last_gas_update = 0.0  # Force IAQ gas update on the first loop
+
+    # Initialize remaining display and GPS timers to current time
+    last_partial_refresh_eink_update = last_full_refresh_eink_update = last_gps_update = last_clock_set_update = current_time
 
     last_gps_fix_time = None
 
@@ -803,6 +802,7 @@ def main():
     sys_meters = 0.0
     sys_hpa = 1013.25
     sys_temp = 20.0
+    bme_gas_ohms = None
     bme_percent_humidity = None
     bme_iaq = None
     sys_iaq = None
@@ -821,6 +821,31 @@ def main():
     full_refresh_mode = None  # Tri-state: True = Full, False = Partial, None = No Refresh
     eink_partial_refresh_count = 0
 
+    # Main loop
+    """
+    Input
+        - get time.monotonic() to use to trigger events, 
+          don't use wall clock time as GPS can reset wall clock time
+        - Poll touch/GPIO buttons, call both buttons
+        - Use one queued button event
+    Sensor data collection
+        - BME680/BMP585 on SENSOR_INTERVAL_SEC
+        - BME680 provides default system readings, but
+          BMP585 overrides pressure/temp/altitude form BME680
+        - BME680 gas/IAQ less frequently on GAS_INTERVAL_SEC
+    GPS data collection
+        - Drain, then get update GPS every loop
+        - Get metrics  on GPS_INTERVAL_SEC
+        - Update system clock with GPS clock every day (Pi clock has time drift)
+    E-Ink Display updates
+        - Full update on every screen change
+        - Schedule partial refresh for updating screen for MAX_EINK_PARTIAL_REFRESH times
+          or if under EINK_PARTIAL_REFRESH_SEC
+        - Render according to display_mode
+    Housekeeping
+        - 20ms SLEEP, each loop
+        - Garbage collection at startup, after gas updates, and after every E-Ink refresh.
+    """
     print("\nStart of main loop")
     gc.collect()
     while True:
@@ -832,7 +857,6 @@ def main():
 
         # Consume queued button press (from either physical GPIO or touch GT911)
         button_state = get_button()
-        eink_update_needed = False
 
         if button_state is not None:
             # Button 1: Display Mode Toggle (Big Dashboard -> Barometer Details -> GPS Details)
@@ -866,7 +890,8 @@ def main():
                 clear_pending_button()
                 full_refresh_mode = True
 
-        # Barometer, Temperature, humidity, IAQ (Every 2 seconds)
+        # Barometer, Temperature, Humidity, IAQ (Every SENSOR_INTERVAL_SEC)
+        # -----------------------------------------------------------------
         if (current_time - last_sensor_update) >= SENSOR_INTERVAL_SEC or first_run:
             last_sensor_update = current_time
 
@@ -874,32 +899,25 @@ def main():
             if temp > OVER_TEMP_WARNING:
                 print(f"WARNING: Pi Zero on-chip temp = {temp:.1f}° C")
 
-            if DEBUG:
-                clock_string = time.strftime("%I:%M:%S", time.localtime())
-                print(f"\nReading sensors @ {current_time:.2f}s \t{clock_string}")
-
             if error_bme680 or bme is None:
                 print(f"No lower-precision Altitude BME680 sensor: {error_bme680}\n")
             else:
-                # IAQ Readings (Every 30 seconds), heats chip substrate
-                if (current_time - last_gas_update) >= GAS_INTERVAL_SEC:
+                bme_percent_humidity = bme.humidity
+
+                # IAQ Readings (Every GAS_INTERVAL_SEC)
+                if (current_time - last_gas_update) >= GAS_INTERVAL_SEC or bme_gas_ohms is None:
                     last_gas_update = current_time
                     print(f"\nBME680 Gas update (every {GAS_INTERVAL_SEC:.0f}s)")
                     bme_gas_ohms = bme.gas
-                    bme_percent_humidity = bme.humidity
-                    bme_iaq = calculate_iaq(bme_gas_ohms, bme_percent_humidity)
-                    print(f"IAQ = {bme_iaq:.1f} ({iaq_quality_to_string(bme_iaq)}), {bme_gas_ohms / 1000.0} Kohms\n")
                     gc.collect()
-                else:
-                    # Trigger non-gas measurement to cache other BME metrics
-                    bme_percent_humidity = bme.humidity
+
+                if bme_gas_ohms is not None and bme_percent_humidity is not None:
+                    bme_iaq = calculate_iaq(bme_gas_ohms, bme_percent_humidity)
 
                 bme_hpa = bme.pressure
                 bme_temp = bme.temperature
                 bme_meters = calculate_altitude(bme_hpa, sea_level_pressure)
-                # print(f"BME680: {bme_hpa} hpa, {bme_temp} °C, {bme_meters} m")
 
-                # Update system with BME680 metrics
                 sys_hpa = bme_hpa
                 sys_temp = bme_temp
                 sys_meters = bme_meters
@@ -913,7 +931,6 @@ def main():
                 bmp_temp = bmp.temperature
                 bmp_meters = calculate_altitude(bmp_hpa, sea_level_pressure)
 
-                # Over-write BME680 values with more accurate BMP585 values
                 sys_hpa = bmp_hpa
                 sys_temp = bmp_temp
                 sys_meters = bmp_meters
@@ -921,86 +938,89 @@ def main():
             print_altimeter_details(sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq, is_metric)
 
             if first_run:
-                # Start with Big Dashboard: Display modes: 0 = Big Dashboard, 1 = Altimeter Details, 2 = GPS Details
                 first_run = False
                 display_mode = 0
                 full_refresh_mode = True  # First draw is a Full Refresh
 
-        has_new_gps = gps.update()
-        # GPS Refresh (Every 1 seconds)
+        # GPS UART Buffer Drain (Runs every loop iteration)
+        # -----------------------------------------------------------------
+        if gps is not None:
+            if gps.update():
+                if gps.has_fix:
+                    last_gps_fix_time = current_time
+
+        # GPS data collection / Clock Sync Interval (Every GPS_INTERVAL_SEC)
+        # -----------------------------------------------------------------
         if (current_time - last_gps_update) >= GPS_INTERVAL_SEC:
             last_gps_update = current_time
-            if gps.has_fix:
-                last_gps_fix_time = time.monotonic()
+            if gps is not None and gps.has_fix:
                 print_gps_metrics(gps, time_zone_hours)
                 if sync_time_requested:
                     if set_pi_system_time_from_gps(gps):
                         last_clock_set_update = current_time
-                        # only after successful Pi system time reset, turn off synch request flag
                         sync_time_requested = False
             else:
                 if last_gps_fix_time is None:
                     print("...Waiting for GPS fix (no previous fix)")
                 else:
-                    minutes_since_fix = int((time.monotonic() - last_gps_fix_time) / 60)
+                    minutes_since_fix = int((current_time - last_gps_fix_time) / 60)
                     print(f"...Waiting for GPS fix ({minutes_since_fix} min since last fix)")
 
-            # Every day request that Pi's system time synchronized with GPS
             if (current_time - last_clock_set_update) >= SET_CLOCK_INTERVAL_SEC:
                 sync_time_requested = True
 
-            # E-ink Display Refresh: Evaluate timers if no button event forced full_refresh_mode
-            time_since_partial = current_time - last_partial_refresh_eink_update
-            time_since_full = current_time - last_full_refresh_eink_update
+        # E-Ink Display Refresh
+        # full_refresh_mode is tri-state: None, False (partial update), True (full update)
+        # -----------------------------------------------------------------
 
-            if full_refresh_mode is None:
-                if time_since_partial >= EINK_PARTIAL_REFRESH_SEC:
-                    # Force full refresh if partial cycle threshold or time limit reached
-                    if (eink_partial_refresh_count >= MAX_EINK_PARTIAL_REFRESH
-                            or time_since_full >= EINK_FULL_REFRESH_SEC):
-                        full_refresh_mode = True
-                    else:
-                        full_refresh_mode = False
-
-            # E-Ink Display Render Execution
-            if full_refresh_mode is not None:
-                if full_refresh_mode:
-                    eink_partial_refresh_count = 0
-                    last_full_refresh_eink_update = current_time
+        # Evaluate if refresh needed and if it should be FULL or PARTIAL
+        if full_refresh_mode is None:
+            # No button pressed: check if a timed update is due
+            if (current_time - last_partial_refresh_eink_update) >= EINK_PARTIAL_REFRESH_SEC:
+                if (eink_partial_refresh_count >= MAX_EINK_PARTIAL_REFRESH or
+                        (current_time - last_full_refresh_eink_update) >= EINK_FULL_REFRESH_SEC):
+                    full_refresh_mode = True
                 else:
-                    eink_partial_refresh_count += 1
+                    full_refresh_mode = False
 
-                last_partial_refresh_eink_update = current_time
+        # Render E-Ink if a refresh was triggered by button or by timer
+        if full_refresh_mode is not None:
+            if full_refresh_mode:
+                eink_partial_refresh_count = 0
+                last_full_refresh_eink_update = current_time
+            else:
+                eink_partial_refresh_count += 1
 
-                if display_mode == 0:
-                    display_big_dashboard(
-                        sys_meters, sys_hpa, sys_iaq, gps, last_gps_fix_time,
-                        is_metric, full_refresh=full_refresh_mode
-                    )
-                elif display_mode == 1:
-                    display_altimeter_details(
-                        sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq,
-                        is_metric, is_final=False, full_refresh=full_refresh_mode
-                    )
-                elif display_mode == 2:
-                    display_gps_details(
-                        gps, last_gps_fix_time, full_refresh=full_refresh_mode
-                    )
+            last_partial_refresh_eink_update = current_time
 
-                # Reset flag and purge residual touch inputs registered during draw cycle
-                full_refresh_mode = None
-                flush_touch_inputs()
+            if display_mode == 0:
+                display_big_dashboard(
+                    sys_meters, sys_hpa, sys_iaq, gps, last_gps_fix_time,
+                    is_metric, full_refresh=full_refresh_mode
+                )
+            elif display_mode == 1:
+                display_altimeter_details(
+                    sys_meters, sys_hpa, sys_temp, sys_humidity, sys_iaq,
+                    is_metric, is_final=False, full_refresh=full_refresh_mode
+                )
+            elif display_mode == 2:
+                display_gps_details(
+                    gps, last_gps_fix_time, full_refresh=full_refresh_mode
+                )
+
+            # after partial/full refresh, prepare for next
+            flush_touch_inputs()
+            if full_refresh_mode:
                 gc.collect()
+            full_refresh_mode = None
 
-        # Sleep to reduce CPU utilization
+        # Housekeeping code
         if LOOP_STRETCH_SLEEP > 0:
             time.sleep(LOOP_STRETCH_SLEEP)
 
-        # Calculate loop execution time
+        # Calculate loop execution time, typically .3 ms (without loop stretch of 20ms)
         end_loop_tick = time.monotonic()
         loop_duration = end_loop_tick - start_loop_tick
-
-        # Loop duration is 50 ms to 60 ms
         # if DEBUG:
         #     print(f"Loop cycle duration: {loop_duration * 1000:.2f} ms")
 
