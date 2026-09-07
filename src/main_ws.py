@@ -111,20 +111,22 @@ from pi_zero_i2c_bridge_utils import PiZeroI2CBridge
 
 from dataclasses import dataclass
 
+
 @dataclass
 class SensorTelemetry:
     altitude_m: float | None = None
     pressure_hpa: float | None = None
     temperature_c: float | None = None
-    humidity: float | None = None
+    humidity: float | None = None  # Range 0.0 to 100.0%
     iaq: float | None = None
-    sensor_mode: str = "NONE"  # "BMP", "BME", or "NONE"
+    sensor_mode: str = "NONE"  # Indicates sensor giving hpa/temp: "BMP", "BME", or "NONE"
+
 
 FALLBACK_SEA_LEVEL_PRESSURE = 1019.00
 
 # Portland OR, PDX
 PDX_STATION_STRING = "PDX - Portland, OR"
-PDX_STATION_HPA = 1016.87
+PDX_STATION_HPA = 1020.93
 PDX_STATION_FEET = 20.
 
 # big change night
@@ -533,7 +535,6 @@ def display_altimeter_details(sens: SensorTelemetry, is_metric, is_final=False,
             temp_f = (sens.temperature_c * 9.0 / 5.0) + 32.0
             temperature_string = f"{temp_f:.1f}° F"
 
-
     humidity_string = f"{sens.humidity:.1f}%" if sens.humidity is not None else "No Sensor"
     iaq_string = f"{sens.iaq:.0f} ({iaq_quality_to_string(sens.iaq)})" if sens.iaq is not None else "No Sensor"
 
@@ -550,10 +551,10 @@ def display_altimeter_details(sens: SensorTelemetry, is_metric, is_final=False,
     line_height = 18
     if is_metric:
         left_margin_x = 3
-        right_align_x = 220
+        right_align_x = 247
     else:
-        left_margin_x = 16
-        right_align_x = 209
+        left_margin_x = 15
+        right_align_x = 240
     display_list_names_values(sensor_data, font_list, line_height, start_y, left_margin_x, right_align_x)
     refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
 
@@ -658,8 +659,8 @@ def display_gps_details(gps, last_gps_fix_time, full_refresh=False):
         font_list = font_medium
         start_y = 25
         line_height = 18
-        left_margin_x = 2
-        right_align_x = 210
+        left_margin_x = 3
+        right_align_x = 247
         display_list_names_values(sensor_data, font_list, line_height, start_y, left_margin_x, right_align_x)
         refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
         flush_touch_inputs()
@@ -706,10 +707,10 @@ def display_final_details(sens: SensorTelemetry, is_metric, gps, last_gps_fix_ti
     line_height = 18
     if is_metric:
         left_margin_x = 3
-        right_align_x = 220
+        right_align_x = 247
     else:
-        left_margin_x = 16
-        right_align_x = 209
+        left_margin_x = 15
+        right_align_x = 235
     display_list_names_values(sensor_data, font_list, line_height, start_y, left_margin_x, right_align_x)
     refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
 
@@ -770,12 +771,12 @@ def display_big_dashboard(sens, gps, last_gps_fix_time, is_metric, full_refresh=
             lat_str_width = font_medium.getlength(lat_string)
             lon_str_width = font_medium.getlength(lon_string)
             lon_lat_diff = (lon_str_width - lat_str_width)
-            epd_draw.text((64 + lon_lat_diff - 5, 86), lat_string, font=font_medium, fill=0)
-            epd_draw.text((64, 104), lon_string, font=font_medium, fill=0)
+            epd_draw.text((90 + lon_lat_diff - 5, 86), lat_string, font=font_medium, fill=0)
+            epd_draw.text((90, 104), lon_string, font=font_medium, fill=0)
         else:
-            epd_draw.text((55, 95), "Acquiring GPS", font=font_medium, fill=0)
+            epd_draw.text((70, 95), "Acquiring GPS", font=font_medium, fill=0)
     else:
-        epd_draw.text((55, 95), "NO GPS Sensor", font=font_medium, fill=0)
+        epd_draw.text((70, 95), "NO GPS Sensor", font=font_medium, fill=0)
 
     # Display IAQ warning box, if poor or worse at bottom right of big display 0 mode
     if sens.iaq and sens.iaq > 100.0:
@@ -1000,7 +1001,7 @@ def main():
             else:
                 # Neither sensor available
                 sens.pressure_hpa = None
-                sens.temperature_c= None
+                sens.temperature_c = None
                 sens.altitude_m = None
                 sensor_mode = "NONE"
 
@@ -1079,8 +1080,7 @@ def main():
 
             if display_mode == 0:
                 display_big_dashboard(
-                    sens, gps, last_gps_fix_time,
-                    is_metric, full_refresh=full_refresh_mode
+                    sens, gps, last_gps_fix_time, is_metric, full_refresh=full_refresh_mode
                 )
             elif display_mode == 1:
                 display_altimeter_details(
