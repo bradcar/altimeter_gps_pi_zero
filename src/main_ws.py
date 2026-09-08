@@ -874,11 +874,11 @@ def main():
     global i2c1, sens, is_metric, gps, last_gps_fix_time
 
     print("\nStarting...")
-    print("=================================================")
-    print(f"{sys.implementation.name} {platform.version()}\nrun on {platform.machine()}")
-    temp = pi_on_chip_temperature()
-    print(f"on-chip Pi Zero temp = {temp:.1f}°C")
-    print("=================================================")
+    print("===================================================")
+    print(f"{sys.implementation.name}, {platform.machine()}")
+    print(f"{platform.version()}")
+    print(f"on-chip Pi Zero temp = {pi_on_chip_temperature():.1f}°C")
+    print("===================================================")
 
     i2c1 = PiZeroI2CBridge("/dev/i2c-1")
     scan_i2c_bus(i2c1)
