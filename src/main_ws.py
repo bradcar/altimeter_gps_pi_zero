@@ -79,14 +79,14 @@ AIRPORTS:
      3. main() Processing Loop
 
 TODOS
+    * TODO add handling of selected altitude and (latitude, longitude) in Oregon Altitude Reference Screen
     * TODO add warning the GPS altitude is diff than barometer
-    * TODO put barometer metrics intro .structure like gps
     * TODO decide how to display if fall back
     * TODO test with other E-Ink display to minimize code overlap
 """
 
 import gc
-import os
+import platform
 import sys
 import time
 
@@ -126,14 +126,12 @@ FALLBACK_SEA_LEVEL_PRESSURE = 1019.00
 
 # Portland OR, PDX
 PDX_STATION_STRING = "PDX - Portland, OR"
-PDX_STATION_HPA = 1020.93
+PDX_STATION_HPA = 1021.61
 PDX_STATION_FEET = 20.
 
 # big change night
 # Altitude: 471.295'  (143.651m).  Barometer: 29.38"  (995.05 hPa). PDX_STATION_HPA = 1010.78
 # Altitude: 351.643'  (107.181m).  Barometer: 29.38"  (995.03 hPa). PDX_STATION_HPA = 1006.38
-
-# Altitude: 348.288'  (106.158m)  Barometer: 29.46"  (997.49 hPa)
 
 # Hawthorne NV, HTH
 HTH_STATION_HPA = 870.00
@@ -160,20 +158,12 @@ EINK_FULL_REFRESH_SEC = 180.0  # required Full refresh E-ink limit(3 minutes / 1
 # Timing Constants (in seconds)
 LOOP_STRETCH_SLEEP = 0.02  # 20 ms sleep each loop
 
-implementation = [sys.implementation.name]
-
 # Declare Global defaults
 sens = SensorTelemetry()
 i2c1 = None
 gps = None
 last_gps_fix_time = None
 is_metric = True
-
-
-def uname():
-    u = os.uname()
-    return [u.sysname, u.nodename, u.release, u.version, u.machine]
-
 
 # Unified button physical and touch input handling
 _pending_button = None
@@ -289,8 +279,7 @@ def i2c_initialize_bmp585_bme680(i2c1: PiZeroI2CBridge):
     Initialize Barometers: BMP585, BME680
 
     :param i2c1: PiZeroI2CBridge, typically created with  i2c1 = PiZeroI2CBridge("/dev/i2c-1")
-    :return:
-    bmp, bme, error_bmp585, error_bme680
+    :return: bmp, bme, error_bmp585, error_bme680
     """
     error_bme680 = False
     error_bmp585 = False
@@ -326,7 +315,7 @@ def calibrate_bme_barometer(bme: BME680_I2C | None, bmp: BMP585 | None):
     elif bme is not None:
         print(f" * No BMP585 to calibrate BME680, using default {average_diff:.7f} hPa")
 
-    # BME680 hPA amount over will be subtracted in calibration code.
+    # BME680 hPa amount over will be subtracted in calibration code.
     if bme is not None:
         bme.hpa_calibration = average_diff
         if bme.hpa_calibration is not None:
@@ -392,13 +381,14 @@ def adjust_altitude_slp(gps, is_metric, altitude_m, pressure_hpa, sea_level_pres
             need_redraw = True
 
         if need_redraw:
-            # Use Partial for fast feedback, but full after 5 to reduce ghosting
-            if partial_refresh_count < 5:
-                partial_refresh_count += 1
-                display_updated_altitude_calibration(new_alt, new_slp, is_metric, full_refresh=True)
-            else:
-                display_updated_altitude_calibration(new_alt, new_slp, is_metric, full_refresh=False)
+            # Use partial refresh for rapid feedback, full refresh every 5th update to clear ghosting
+            is_full = (partial_refresh_count >= 5)
+            display_updated_altitude_calibration(new_alt, new_slp, is_metric, full_refresh=is_full)
+
+            if is_full:
                 partial_refresh_count = 0
+            else:
+                partial_refresh_count += 1
             need_redraw = False
 
         time.sleep(0.03)
@@ -419,33 +409,115 @@ def display_list_names_values(altitude_data: list[tuple[str, str]], font_list, l
 
 
 def display_altitude_reference(is_metric, full_refresh=False):
-    epd_draw.rectangle((0, 0, 250, 122), fill=255)
-
-    epd_draw.text((3, 5), "Oregon Altitude Reference", font=font_small, fill=0)
-    epd_draw.line((5, 21, 250, 21), fill=0, width=1)
-
-    altitude_data = [
-        ("Garage:", altitude_to_string(feet_to_meters(339), 0, is_metric)),
-        ("Sylvan On-ramp:", altitude_to_string(feet_to_meters(761), 0, is_metric)),
-        ("Meadows Main:", altitude_to_string(feet_to_meters(5003), 0, is_metric)),
-        ("Meadows HRM:", altitude_to_string(feet_to_meters(4540), 0, is_metric)),
-        ("Bachelor Main:", altitude_to_string(feet_to_meters(6207), 0, is_metric)),
-        ("Rock Gym Beav:", altitude_to_string(feet_to_meters(122), 0, is_metric)),
+    """
+    Displays a scrollable list of altitude reference locations on the E-ink display.
+    Uses the rotary encoder to navigate and the rotary encoder button (or Touch/Key 2) to select.
+    returns selected text_string, altitude in meters, (latitude, longitude)
+    """
+    reference_locations = [
+        ("Garage", feet_to_meters(339), (45.4971, -122.74601)),
+        ("Sylvan On-ramp", feet_to_meters(777), (45.50818, -122.73631)),
+        # TODO fix elevation data below
+        ("Rock Gym Beav", feet_to_meters(122), (45.51380, -122.78933)),
+        ("Meadows HRM", feet_to_meters(4540), (45.32659, -121.63842)),
+        ("Meadows Main", feet_to_meters(5003), (45.33077, -121.66336)),
+        ("Bachelor Main", feet_to_meters(6207), (44.00395, -121.67923)),
+        ("Home Office", feet_to_meters(371), (45.49721, -122.74619)),
     ]
 
-    font_list = font_small
-    start_y = 25
-    line_height = 16
-    if is_metric:
-        left_margin_x = 25
-        right_align_x = 225
-    else:
-        left_margin_x = 29
-        right_align_x = 216
+    total_items = len(reference_locations)
+    if total_items == 0:
+        return None
 
-    display_list_names_values(altitude_data, font_list, line_height, start_y, left_margin_x, right_align_x)
-    refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=full_refresh)
-    time.sleep(5)
+    visible_count = 6
+    selected_index = 0
+    top_index = 0
+
+    clear_pending_button()
+    if 'encoder' in globals() and encoder is not None:
+        encoder.steps = 0
+
+    last_drawn_index = -1
+    is_first_draw = True
+
+    while True:
+        # Update window based on selected_index
+        if selected_index < top_index:
+            top_index = selected_index
+        elif selected_index >= top_index + visible_count:
+            top_index = selected_index - visible_count + 1
+
+        # Redraw screen when selection changed or on first render
+        if selected_index != last_drawn_index:
+            last_drawn_index = selected_index
+            epd_draw.rectangle((0, 0, 250, 122), fill=255)  # Clear Canvas
+            epd_draw.text((3, 2), "Oregon Altitude Reference", font=font_small, fill=0)
+            epd_draw.line((0, 17, 250, 17), fill=0, width=1)
+
+            # Draw Windowed Items (up to 6)
+            y_start = 20
+            row_height = 16
+
+            for row in range(min(visible_count, total_items)):
+                item_idx = top_index + row
+                if item_idx >= total_items:
+                    break
+
+                text, alt_m, coords = reference_locations[item_idx]
+                alt_str = altitude_to_string(alt_m, 0, is_metric)
+
+                y_pos = y_start + (row * row_height)
+                is_selected = (item_idx == selected_index)
+
+                if is_selected:
+                    # Highlighted with black box with white text
+                    epd_draw.rectangle((2, y_pos, 248, y_pos + row_height - 1), fill=0)
+                    text_fill = 255
+                else:
+                    text_fill = 0
+
+                epd_draw.text((6, y_pos + 1), text, font=font_small, fill=text_fill)
+                alt_width = font_small.getlength(alt_str)
+                epd_draw.text((244 - alt_width, y_pos + 1), alt_str, font=font_small, fill=text_fill)
+
+            # Determine refresh: start full_refresh, rotary scrolls use partial refresh for low latency
+            do_full = full_refresh if is_first_draw else False
+            refresh_eink_display(epd_disp, epd_draw, epd_image, full_refresh=do_full)
+            is_first_draw = False
+
+        # Rotary encoder navigation
+        if 'encoder' in globals() and encoder is not None:
+            steps = encoder.steps
+            if steps != 0:
+                encoder.steps = 0
+                # Move selection based on rotation direction
+                if steps > 0:
+                    selected_index = min(total_items - 1, selected_index + 1)
+                else:
+                    selected_index = max(0, selected_index - 1)
+
+        # Check rotary switch press
+        rotary_pressed = False
+        if 'rotary_switch' in globals() and rotary_switch is not None:
+            # Check rotary state
+            if hasattr(rotary_switch, 'is_pressed') and rotary_switch.is_pressed:
+                rotary_pressed = True
+
+        if rotary_pressed:
+            clear_pending_button()
+            return reference_locations[selected_index]
+
+        # Check Touch
+        check_touch_buttons()
+        button_state = get_button()
+
+        if button_state is not None:
+            # Button 4 also returns highlighted item
+            if button_state == 4:
+                clear_pending_button()
+                return reference_locations[selected_index]
+
+        time.sleep(0.02)
 
 
 def display_updated_altitude_calibration(alt, press, is_metric, full_refresh=False):
@@ -618,7 +690,7 @@ def gps_clock_string(gps, time_zone_hours):
     return f"{local_time.tm_hour:02}:{local_time.tm_min:02}:{local_time.tm_sec:02}"
 
 
-def display_gps_details(gps, last_gps_fix_time, full_refresh=False):
+def display_gps_details(gps, last_gps_fix_time, is_metric, full_refresh=False):
     """
     display GPS details on screen, protect for None values
     """
@@ -644,9 +716,14 @@ def display_gps_details(gps, last_gps_fix_time, full_refresh=False):
         epd_draw.line((5, 21, 250, 21), fill=0, width=1)
 
         # List of GPS metrics
-        lat_lon_accuracy_str = f"+/- {gps.horizontal_dilution * 2.5: .1f}m" if gps.horizontal_dilution is not None else "N/A"
-        alt_str = f"{gps.altitude_m:.1f}m" if gps.altitude_m is not None else "N/A"
-        speed_str = f"{gps.speed_knots * 1.15078:.1f} mph" if gps.speed_knots is not None else "0.0 mph"
+        if is_metric:
+            lat_lon_accuracy_str = f"+/- {gps.horizontal_dilution * 2.5: .1f}m" if gps.horizontal_dilution is not None else "N/A"
+            alt_str = f"{gps.altitude_m:.1f}m" if gps.altitude_m is not None else "N/A"
+            speed_str = f"{gps.speed_knots * 1.15078:.1f} mph" if gps.speed_knots is not None else "0.0 mph"
+        else:
+            lat_lon_accuracy_str = f"+/- {feet_to_meters(gps.horizontal_dilution * 2.5): .1f}\'" if gps.horizontal_dilution is not None else "N/A"
+            alt_str = f"{feet_to_meters(gps.altitude_m):.1f}'" if gps.altitude_m is not None else "N/A"
+            speed_str = f"{gps.speed_kmh:.1f} kph" if gps.speed_knots is not None else "0.0 mph"
 
         sensor_data = [
             ("Lat", get_lat_string(gps)),
@@ -798,7 +875,7 @@ def main():
 
     print("\nStarting...")
     print("=================================================")
-    print(implementation[0], uname()[3], "\nrun on", uname()[4])
+    print(f"{sys.implementation.name} {platform.version()}\nrun on {platform.machine()}")
     temp = pi_on_chip_temperature()
     print(f"on-chip Pi Zero temp = {temp:.1f}°C")
     print("=================================================")
@@ -933,7 +1010,9 @@ def main():
 
             # Button 4: Oregon Altitude Reference Screen
             elif button_state == 4:
-                display_altitude_reference(is_metric)
+                location, location_altitude_m, coords = display_altitude_reference(is_metric)
+                # TODO add handling of selected altitude and (latitude, longitude)
+                print(f"** selected: {location}, at {location_altitude_m:.1f} m, at {coords}")
                 # Clear pending inputs so touch inputs during modal display don't trigger actions upon return
                 clear_pending_button()
                 full_refresh_mode = True
@@ -1088,7 +1167,7 @@ def main():
                 )
             elif display_mode == 2:
                 display_gps_details(
-                    gps, last_gps_fix_time, full_refresh=full_refresh_mode
+                    gps, last_gps_fix_time, is_metric, full_refresh=full_refresh_mode
                 )
 
             # after partial/full refresh, prepare for next
