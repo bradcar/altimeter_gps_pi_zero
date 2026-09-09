@@ -418,7 +418,7 @@ def display_altitude_reference(is_metric, full_refresh=False):
         ("Garage", feet_to_meters(339), (45.4971, -122.74601)),
         ("Sylvan On-ramp", feet_to_meters(777), (45.50818, -122.73631)),
         # TODO fix elevation data below
-        ("Rock Gym Beav", feet_to_meters(122), (45.51380, -122.78933)),
+        ("Rock Gym Beav", feet_to_meters(325), (45.51380, -122.78933)),
         ("Meadows HRM", feet_to_meters(4540), (45.32659, -121.63842)),
         ("Meadows Main", feet_to_meters(5003), (45.33077, -121.66336)),
         ("Bachelor Main", feet_to_meters(6207), (44.00395, -121.67923)),
